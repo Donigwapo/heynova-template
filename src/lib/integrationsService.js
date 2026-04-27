@@ -27,6 +27,14 @@ export async function fetchGmailConnection() {
   return await fetchIntegrationConnectionByProvider('gmail')
 }
 
+export async function fetchOutlookConnection() {
+  return await fetchIntegrationConnectionByProvider('outlook')
+}
+
+export async function fetchLinkedInConnection() {
+  return await fetchIntegrationConnectionByProvider('linkedin')
+}
+
 export async function startGoogleCalendarOAuth() {
   const { data, error } = await supabase.functions.invoke(googleOAuthStartFunctionName, {
     body: {

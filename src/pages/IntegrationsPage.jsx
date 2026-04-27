@@ -91,8 +91,14 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
   }
 
   useEffect(() => {
-    loadGoogleConnection()
-    loadGmailConnection()
+    const timer = window.setTimeout(() => {
+      loadGoogleConnection()
+      loadGmailConnection()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
   }, [])
 
   useEffect(() => {
@@ -103,32 +109,38 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
 
     if (!gcal && !gmail) return
 
-    if (gcal === 'connected') {
-      setGoogleStatusMessage('Google Calendar connected successfully.')
-      loadGoogleConnection()
-    }
+    const timer = window.setTimeout(() => {
+      if (gcal === 'connected') {
+        setGoogleStatusMessage('Google Calendar connected successfully.')
+        loadGoogleConnection()
+      }
 
-    if (gcal === 'error') {
-      setGoogleStatusMessage(
-        reason ? `Google Calendar connection failed: ${reason}` : 'Google Calendar connection failed.'
-      )
-    }
+      if (gcal === 'error') {
+        setGoogleStatusMessage(
+          reason ? `Google Calendar connection failed: ${reason}` : 'Google Calendar connection failed.'
+        )
+      }
 
-    if (gmail === 'connected') {
-      setGmailStatusMessage('Gmail connected successfully.')
-      loadGmailConnection()
-    }
+      if (gmail === 'connected') {
+        setGmailStatusMessage('Gmail connected successfully.')
+        loadGmailConnection()
+      }
 
-    if (gmail === 'error') {
-      setGmailStatusMessage(reason ? `Gmail connection failed: ${reason}` : 'Gmail connection failed.')
-    }
+      if (gmail === 'error') {
+        setGmailStatusMessage(reason ? `Gmail connection failed: ${reason}` : 'Gmail connection failed.')
+      }
 
-    params.delete('gcal')
-    params.delete('gmail')
-    params.delete('reason')
-    const nextQuery = params.toString()
-    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`
-    window.history.replaceState({}, '', nextUrl)
+      params.delete('gcal')
+      params.delete('gmail')
+      params.delete('reason')
+      const nextQuery = params.toString()
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`
+      window.history.replaceState({}, '', nextUrl)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
   }, [])
 
   const handleStartGoogleOAuth = async () => {

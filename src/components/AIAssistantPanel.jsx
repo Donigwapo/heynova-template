@@ -59,18 +59,6 @@ const suggestions = [
   'Show my open tasks',
 ]
 
-const sampleFollowUp = `Hi there,
-
-Great speaking with you earlier today. I wanted to quickly follow up on the next steps we discussed.
-
-• I’ll send over the revised proposal by tomorrow morning.
-• Once you review it, we can schedule a 20-minute check-in to align on rollout timing.
-
-If anything changed on your side, feel free to reply here and I’ll adjust accordingly.
-
-Best,
-Heynova Team`
-
 const defaultSummaryTemplate = {
   title: 'Client Strategy Call — April 6, 2026',
   keyPoints: [

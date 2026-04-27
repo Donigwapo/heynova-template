@@ -12,11 +12,14 @@ import {
   Workflow,
 } from 'lucide-react'
 import { fetchRecentAIDraftsByUserId } from '../lib/aiDraftsService'
+import { fetchGmailInboxIntelligence } from '../lib/gmailIntelligenceService'
 import { fetchMeetingsByUserId } from '../lib/meetingsService'
 import { supabase } from '../lib/supabase'
 import ActivityList from '../components/ActivityList'
 import AIAssistantPanel from '../components/AIAssistantPanel'
 import DashboardCard from '../components/DashboardCard'
+import InboxIntelligenceCard from '../components/InboxIntelligenceCard'
+import InboxIntelligenceDrawer from '../components/InboxIntelligenceDrawer'
 import RecentAIDraftsCard from '../components/RecentAIDraftsCard'
 import Sidebar from '../components/Sidebar'
 import StatCard from '../components/StatCard'
@@ -95,6 +98,12 @@ function DashboardPage({ userProfile }) {
   const [recentAIDrafts, setRecentAIDrafts] = useState([])
   const [isRecentAIDraftsLoading, setIsRecentAIDraftsLoading] = useState(false)
   const [recentAIDraftsError, setRecentAIDraftsError] = useState('')
+  const [inboxIntelligenceCounts, setInboxIntelligenceCounts] = useState(null)
+  const [inboxIntelligenceAttentionCount, setInboxIntelligenceAttentionCount] = useState(0)
+  const [isInboxIntelligenceLoading, setIsInboxIntelligenceLoading] = useState(false)
+  const [classifiedEmails, setClassifiedEmails] = useState([])
+  const [selectedInboxTag, setSelectedInboxTag] = useState(null)
+  const [isInboxDrawerOpen, setIsInboxDrawerOpen] = useState(false)
 
   const resizeStateRef = useRef({
     startX: 0,
@@ -240,6 +249,78 @@ function DashboardPage({ userProfile }) {
     }
   }, [userProfile?.authUserId])
 
+  useEffect(() => {
+    let isMounted = true
+
+    const loadInboxIntelligence = async () => {
+      const userId = userProfile?.authUserId
+
+      if (!userId) {
+        setInboxIntelligenceCounts(null)
+        setInboxIntelligenceAttentionCount(0)
+        setClassifiedEmails([])
+        setIsInboxIntelligenceLoading(false)
+        return
+      }
+
+      setIsInboxIntelligenceLoading(true)
+
+      const { result, error } = await fetchGmailInboxIntelligence()
+
+      if (!isMounted) return
+
+      if (error || !result?.ok || !Array.isArray(result?.emails)) {
+        setInboxIntelligenceCounts(null)
+        setInboxIntelligenceAttentionCount(0)
+        setClassifiedEmails([])
+        setIsInboxIntelligenceLoading(false)
+        return
+      }
+
+      const emails = result.emails
+      setClassifiedEmails(emails)
+
+      const baseCounts = {
+        'Needs Reply': 0,
+        'Follow-Up Required': 0,
+        'High Priority': 0,
+        Opportunity: 0,
+        'At Risk': 0,
+        'Meeting Related': 0,
+        'Low Priority': 0,
+        Newsletter: 0,
+      }
+
+      emails.forEach((email) => {
+        const tags = Array.isArray(email?.tags) ? email.tags : []
+        tags.forEach((tag) => {
+          if (Object.prototype.hasOwnProperty.call(baseCounts, tag)) {
+            baseCounts[tag] += 1
+          }
+        })
+      })
+
+      const attentionCount =
+        baseCounts['Needs Reply'] +
+        baseCounts['Follow-Up Required'] +
+        baseCounts['High Priority'] +
+        baseCounts.Opportunity +
+        baseCounts['At Risk']
+
+      const hasAnyCount = Object.values(baseCounts).some((value) => value > 0)
+
+      setInboxIntelligenceCounts(hasAnyCount ? baseCounts : null)
+      setInboxIntelligenceAttentionCount(attentionCount)
+      setIsInboxIntelligenceLoading(false)
+    }
+
+    loadInboxIntelligence()
+
+    return () => {
+      isMounted = false
+    }
+  }, [userProfile?.authUserId])
+
   const handleDraftPatched = useCallback((draftId, patch) => {
     if (!draftId || !patch) return
 
@@ -309,6 +390,20 @@ function DashboardPage({ userProfile }) {
                   Sign Out
                 </button>
               </div>
+
+              {inboxIntelligenceCounts && (
+                <section className="mb-4">
+                  <InboxIntelligenceCard
+                    counts={inboxIntelligenceCounts}
+                    attentionCount={inboxIntelligenceAttentionCount}
+                    isLoading={isInboxIntelligenceLoading}
+                    onTagClick={(tag) => {
+                      setSelectedInboxTag(tag)
+                      setIsInboxDrawerOpen(true)
+                    }}
+                  />
+                </section>
+              )}
 
               <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {stats.map((stat) => (
@@ -436,6 +531,16 @@ function DashboardPage({ userProfile }) {
           />
         </aside>
       </div>
+
+      <InboxIntelligenceDrawer
+        isOpen={isInboxDrawerOpen}
+        selectedTag={selectedInboxTag}
+        emails={classifiedEmails}
+        onClose={() => {
+          setIsInboxDrawerOpen(false)
+          setSelectedInboxTag(null)
+        }}
+      />
     </div>
   )
 }

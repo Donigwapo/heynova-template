@@ -5,8 +5,13 @@ import { fetchProfileByUserId } from './lib/profileService'
 import { supabase } from './lib/supabase'
 import { getUserProfile } from './lib/userProfile'
 import DashboardPage from './pages/DashboardPage'
+import InboxPage from './pages/InboxPage'
+import InboxProviderPage from './pages/InboxProviderPage'
 import IntegrationsPage from './pages/IntegrationsPage'
 import LoginPage from './pages/LoginPage'
+import LeadExtractorPage from './pages/LeadExtractorPage'
+import LeadDatabasePage from './pages/LeadDatabasePage'
+import LeadDatabaseDetailPage from './pages/LeadDatabaseDetailPage'
 
 function App() {
   const [session, setSession] = useState(null)
@@ -119,6 +124,51 @@ function App() {
         element={
           <ProtectedRoute isAuthenticated={isAuthenticated}>
             <IntegrationsPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/inbox"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <InboxPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/inbox/:provider"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <InboxProviderPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/lead-extractor"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <LeadExtractorPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/lead-database"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <LeadDatabasePage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/lead-database/:id"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <LeadDatabaseDetailPage userProfile={userProfile} />
           </ProtectedRoute>
         }
       />
