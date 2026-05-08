@@ -1,6 +1,9 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 export async function saveMeetingSummary({ meetingId, userId = null, summary }) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+
   if (!meetingId || !summary) {
     return {
       data: null,
@@ -36,6 +39,14 @@ export async function saveMeetingSummary({ meetingId, userId = null, summary }) 
   }
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'meetings',
+      operation: 'update maybeSingle',
+      userId,
+      pathname,
+      error,
+      extra: { meetingId },
+    })
     return { data: null, error }
   }
 
@@ -53,6 +64,8 @@ export async function saveMeetingSummary({ meetingId, userId = null, summary }) 
 }
 
 export async function fetchMeetingsByUserId(userId) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+
   if (!userId) {
     return { meetings: [], error: null }
   }
@@ -65,6 +78,13 @@ export async function fetchMeetingsByUserId(userId) {
     .eq('user_id', userId)
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'meetings',
+      operation: 'select many',
+      userId,
+      pathname,
+      error,
+    })
     return { meetings: [], error }
   }
 
@@ -72,6 +92,8 @@ export async function fetchMeetingsByUserId(userId) {
 }
 
 export async function fetchMeetingsByIdsForUser(userId, meetingIds) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+
   if (!userId || !Array.isArray(meetingIds) || meetingIds.length === 0) {
     return { meetings: [], error: null }
   }
@@ -83,6 +105,14 @@ export async function fetchMeetingsByIdsForUser(userId, meetingIds) {
     .in('id', meetingIds)
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'meetings',
+      operation: 'select many by ids',
+      userId,
+      pathname,
+      error,
+      extra: { meetingIdsCount: meetingIds.length },
+    })
     return { meetings: [], error }
   }
 

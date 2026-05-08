@@ -43,6 +43,10 @@ function formatSyncTimestamp(value) {
 }
 
 function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
+  console.log('[RouteTrace] IntegrationsPage render', {
+    pathname: window.location.pathname,
+    userId: userProfile?.authUserId || null,
+  })
   const [googleConnection, setGoogleConnection] = useState(null)
   const [isLoadingGoogleConnection, setIsLoadingGoogleConnection] = useState(false)
   const [googleConnectionError, setGoogleConnectionError] = useState('')
@@ -152,7 +156,6 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
     const { authUrl, error } = await startGoogleCalendarOAuth()
 
     if (error || !authUrl) {
-      console.error('[Integrations] Google OAuth start failed', error)
       setGoogleStatusMessage('Unable to start Google Calendar connection. Please try again.')
       setIsStartingGoogleOAuth(false)
       return
@@ -165,7 +168,6 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
     if (isStartingGmailOAuth) return
 
     if (!userProfile?.authUserId && !userProfile?.id) {
-      console.error('[Integrations] Gmail OAuth blocked: unauthenticated user')
       setGmailStatusMessage('Please sign in again before connecting Gmail.')
       return
     }
@@ -176,7 +178,6 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
     const { authUrl, error } = await startGmailOAuth()
 
     if (error || !authUrl) {
-      console.error('[Integrations] Gmail OAuth start failed', error)
       setGmailStatusMessage('Unable to start Gmail connection. Please try again.')
       setIsStartingGmailOAuth(false)
       return
@@ -200,7 +201,9 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
     }
 
     const syncedCount = result?.syncedCount || 0
-    setGoogleStatusMessage(`Google Calendar sync complete. Synced ${syncedCount} event${syncedCount === 1 ? '' : 's'}.`)
+    setGoogleStatusMessage(
+      `Google Calendar sync complete. Synced ${syncedCount} event${syncedCount === 1 ? '' : 's'}.`
+    )
     setIsGoogleSyncing(false)
     loadGoogleConnection()
   }
@@ -252,51 +255,49 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
           <TopHeader onRunCommand={onRunCommand} userProfile={userProfile} />
 
           <main className="flex-1 overflow-auto bg-slate-50">
-            <div className="mx-auto w-full max-w-7xl p-4 lg:p-6">
+            <div className="w-full px-4 py-4 lg:px-6 lg:py-6">
               <header className="mb-6">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 lg:text-3xl">
-                  Integrations
-                </h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 lg:text-3xl">Integrations</h1>
                 <p className="mt-1 text-sm text-slate-500">
                   Connect your tools to unlock automation and AI-powered workflows.
                 </p>
               </header>
 
               {googleStatusMessage && (
-                <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">
                   {googleStatusMessage}
                 </div>
               )}
 
-              {gmailStatusMessage && (
-                <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                  {gmailStatusMessage}
-                </div>
-              )}
-
               {googleConnectionError && (
-                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                   {googleConnectionError}
                 </div>
               )}
 
+              {gmailStatusMessage && (
+                <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">
+                  {gmailStatusMessage}
+                </div>
+              )}
+
               {gmailConnectionError && (
-                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                   {gmailConnectionError}
                 </div>
               )}
 
               <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Total</p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Total Integrations</p>
                   <p className="mt-1 text-xl font-semibold text-slate-900">{totalIntegrations}</p>
                 </div>
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 shadow-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">
-                    Connected
-                  </p>
-                  <p className="mt-1 text-xl font-semibold text-emerald-800">{connectedCount}</p>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Connected</p>
+                  <p className="mt-1 text-xl font-semibold text-emerald-700">{connectedCount}</p>
                 </div>
+
                 <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Available</p>
                   <p className="mt-1 text-xl font-semibold text-slate-900">{availableCount}</p>
@@ -305,13 +306,12 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
 
               <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {integrations.map((integration) => {
-                  const isGoogle = integration.key === 'google_calendar'
                   const isConnected = integration.connected
 
                   return (
                     <article
-                      key={integration.name}
-                      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                      key={integration.key}
+                      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-150 hover:-translate-y-px hover:shadow-md"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -326,11 +326,7 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
                               : 'border-slate-200 bg-slate-50 text-slate-600'
                           }`}
                         >
-                          {integration.isLoading
-                            ? 'Checking...'
-                            : isConnected
-                              ? 'Connected'
-                              : 'Not connected'}
+                          {integration.isLoading ? 'Checking…' : isConnected ? 'Connected' : 'Not connected'}
                         </span>
                       </div>
 
@@ -346,56 +342,48 @@ function IntegrationsPage({ userProfile, onRunCommand = () => {} }) {
                           </p>
                         </div>
 
-                        {isGoogle ? (
-                          <div className="flex items-center gap-2">
+                        {integration.key === 'google_calendar' ? (
+                          isConnected ? (
                             <button
                               type="button"
-                              onClick={isConnected ? handleManualGoogleSync : handleStartGoogleOAuth}
-                              disabled={isStartingGoogleOAuth || isGoogleSyncing || integration.isLoading}
-                              className={`rounded-xl border px-3 py-2 text-sm font-medium transition-all duration-150 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                                isConnected
-                                  ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                              }`}
+                              onClick={handleManualGoogleSync}
+                              disabled={isGoogleSyncing}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              {integration.isLoading
-                                ? 'Checking...'
-                                : isConnected
-                                  ? isGoogleSyncing
-                                    ? 'Syncing...'
-                                    : 'Sync Now'
-                                  : isStartingGoogleOAuth
-                                    ? 'Redirecting...'
-                                    : 'Connect Integration'}
+                              {isGoogleSyncing ? 'Syncing…' : 'Sync Now'}
                             </button>
-                          </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleStartGoogleOAuth}
+                              disabled={isStartingGoogleOAuth}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isStartingGoogleOAuth ? 'Redirecting…' : 'Connect Integration'}
+                            </button>
+                          )
                         ) : integration.key === 'gmail' ? (
-                          <button
-                            type="button"
-                            onClick={isConnected ? undefined : handleStartGmailOAuth}
-                            disabled={isStartingGmailOAuth || integration.isLoading}
-                            className={`rounded-xl border px-3 py-2 text-sm font-medium transition-all duration-150 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                              isConnected
-                                ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                                : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                            }`}
-                          >
-                            {integration.isLoading
-                              ? 'Checking...'
-                              : isStartingGmailOAuth
-                                ? 'Redirecting...'
-                                : isConnected
-                                  ? 'Disconnect'
-                                  : 'Connect Gmail'}
-                          </button>
+                          isConnected ? (
+                            <button
+                              type="button"
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-slate-300 hover:bg-slate-100"
+                            >
+                              Disconnect
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleStartGmailOAuth}
+                              disabled={isStartingGmailOAuth}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isStartingGmailOAuth ? 'Redirecting…' : 'Connect Gmail'}
+                            </button>
+                          )
                         ) : (
                           <button
                             type="button"
-                            className={`rounded-xl border px-3 py-2 text-sm font-medium transition-all duration-150 hover:shadow-sm ${
-                              isConnected
-                                ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                                : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                            }`}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-slate-300 hover:bg-slate-100"
                           >
                             {isConnected ? 'Manage Integration' : 'Connect Integration'}
                           </button>

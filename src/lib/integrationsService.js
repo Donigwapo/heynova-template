@@ -1,3 +1,4 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 const googleOAuthStartFunctionName =
@@ -10,12 +11,55 @@ const gmailOAuthStartFunctionName =
   import.meta.env.VITE_SUPABASE_GMAIL_OAUTH_START_FUNCTION || 'gmail-oauth-start'
 
 async function fetchIntegrationConnectionByProvider(provider) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+
+  if (authError) {
+    logSupabaseQueryError({
+      table: 'auth.users',
+      operation: 'getUser',
+      userId: null,
+      pathname,
+      error: authError,
+      extra: { provider },
+    })
+
+    return {
+      connection: null,
+      error: authError,
+    }
+  }
+
+  const userId = authData?.user?.id || null
+
+  // For unauthenticated/cleared sessions, return a clean "not connected" state
+  // so UI can still render without hard failures.
+  if (!userId) {
+    return {
+      connection: null,
+      error: null,
+    }
+  }
+
   const { data, error } = await supabase
     .from('integration_connections')
     .select('id, provider, connected_email, scope, expires_at, status, last_synced_at, updated_at')
     .eq('provider', provider)
+    .eq('user_id', userId)
     .maybeSingle()
 
+  if (error) {
+    logSupabaseQueryError({
+      table: 'integration_connections',
+      operation: 'select maybeSingle',
+      userId,
+      pathname,
+      error,
+      extra: { provider },
+    })
+  }
+
+  // No row should be treated as not connected (null connection), not as a hard failure.
   return { connection: data || null, error: error || null }
 }
 

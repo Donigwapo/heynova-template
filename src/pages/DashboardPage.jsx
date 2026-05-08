@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   CalendarCheck2,
   CalendarDays,
@@ -13,7 +13,6 @@ import {
 } from 'lucide-react'
 import { fetchRecentAIDraftsByUserId } from '../lib/aiDraftsService'
 import { fetchGmailInboxIntelligence } from '../lib/gmailIntelligenceService'
-import { fetchMeetingsByUserId } from '../lib/meetingsService'
 import { supabase } from '../lib/supabase'
 import ActivityList from '../components/ActivityList'
 import AIAssistantPanel from '../components/AIAssistantPanel'
@@ -63,6 +62,11 @@ const todaysOverview = [
   },
 ]
 
+const upcomingMeetings = [
+  { id: 'm1', display: '11:00 AM — Client Strategy Call' },
+  { id: 'm2', display: '1:30 PM — Team Sync Meeting' },
+  { id: 'm3', display: '3:00 PM — Sales Review' },
+]
 
 const recentActivity = [
   {
@@ -86,15 +90,10 @@ const recentActivity = [
 ]
 
 function DashboardPage({ userProfile }) {
-  const MIN_AI_PANEL_WIDTH = 280
-  const MAX_AI_PANEL_WIDTH = 420
-
-  const [aiPanelWidth, setAiPanelWidth] = useState(320)
-  const [isResizingAiPanel, setIsResizingAiPanel] = useState(false)
-  const [commandAction, setCommandAction] = useState(null)
-  const [meetings, setMeetings] = useState([])
-  const [isMeetingsLoading, setIsMeetingsLoading] = useState(false)
-  const [meetingsError, setMeetingsError] = useState('')
+  console.log('[RouteTrace] DashboardPage render', {
+    pathname: window.location.pathname,
+    userId: userProfile?.authUserId || null,
+  })
   const [recentAIDrafts, setRecentAIDrafts] = useState([])
   const [isRecentAIDraftsLoading, setIsRecentAIDraftsLoading] = useState(false)
   const [recentAIDraftsError, setRecentAIDraftsError] = useState('')
@@ -104,100 +103,7 @@ function DashboardPage({ userProfile }) {
   const [classifiedEmails, setClassifiedEmails] = useState([])
   const [selectedInboxTag, setSelectedInboxTag] = useState(null)
   const [isInboxDrawerOpen, setIsInboxDrawerOpen] = useState(false)
-
-  const resizeStateRef = useRef({
-    startX: 0,
-    startWidth: 320,
-  })
-
-  useEffect(() => {
-    const handleMouseMove = (event) => {
-      if (!isResizingAiPanel) return
-
-      const delta = resizeStateRef.current.startX - event.clientX
-      const nextWidth = resizeStateRef.current.startWidth + delta
-      const clampedWidth = Math.min(
-        MAX_AI_PANEL_WIDTH,
-        Math.max(MIN_AI_PANEL_WIDTH, nextWidth)
-      )
-
-      setAiPanelWidth(clampedWidth)
-    }
-
-    const handleMouseUp = () => {
-      if (!isResizingAiPanel) return
-      setIsResizingAiPanel(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizingAiPanel])
-
-  const startAiPanelResize = (event) => {
-    if (window.innerWidth < 1024) return
-
-    setIsResizingAiPanel(true)
-    resizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: aiPanelWidth,
-    }
-
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }
-
-  const handleRunCommand = (action) => {
-    setCommandAction({ ...action, id: Date.now() })
-  }
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-  }
-
-  useEffect(() => {
-    let isMounted = true
-
-    const loadMeetings = async () => {
-      const userId = userProfile?.authUserId
-
-      if (!userId) {
-        setMeetings([])
-        setMeetingsError('')
-        setIsMeetingsLoading(false)
-        return
-      }
-
-      setIsMeetingsLoading(true)
-      setMeetingsError('')
-
-      const { meetings: rows, error } = await fetchMeetingsByUserId(userId)
-
-      if (!isMounted) return
-
-      if (error) {
-        setMeetings([])
-        setMeetingsError('Unable to load meetings right now.')
-        setIsMeetingsLoading(false)
-        return
-      }
-
-      setMeetings(rows || [])
-      setIsMeetingsLoading(false)
-    }
-
-    loadMeetings()
-
-    return () => {
-      isMounted = false
-    }
-  }, [userProfile?.authUserId])
+  const [commandAction, setCommandAction] = useState(null)
 
   useEffect(() => {
     let isMounted = true
@@ -329,35 +235,9 @@ function DashboardPage({ userProfile }) {
     )
   }, [])
 
-  const normalizedUpcomingMeetings = useMemo(() => {
-    return meetings
-      .map((meeting) => {
-        const startsAt =
-          meeting?.starts_at || meeting?.scheduled_at || meeting?.start_time || null
-        const parsed = startsAt ? new Date(startsAt) : null
-
-        const timeLabel = parsed && !Number.isNaN(parsed.getTime())
-          ? parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-          : 'TBD'
-
-        const title = meeting?.title || meeting?.name || 'Untitled Meeting'
-
-        return {
-          id: meeting?.id || `${title}-${startsAt || 'no-time'}`,
-          title,
-          startsAt,
-          timestamp: parsed && !Number.isNaN(parsed.getTime()) ? parsed.getTime() : null,
-          display: `${timeLabel} — ${title}`,
-        }
-      })
-      .sort((a, b) => {
-        if (!a.timestamp && !b.timestamp) return 0
-        if (!a.timestamp) return 1
-        if (!b.timestamp) return -1
-        return a.timestamp - b.timestamp
-      })
-      .slice(0, 6)
-  }, [meetings])
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+  }
 
   return (
     <div className="h-full bg-slate-50 text-slate-900">
@@ -367,10 +247,10 @@ function DashboardPage({ userProfile }) {
         </aside>
 
         <div className="flex min-h-0 flex-1 flex-col">
-          <TopHeader onRunCommand={handleRunCommand} userProfile={userProfile} />
+          <TopHeader onRunCommand={(action) => setCommandAction({ ...action, id: Date.now() })} userProfile={userProfile} />
 
           <main className="flex-1 overflow-auto bg-slate-50">
-            <div className="mx-auto w-full max-w-7xl p-4 lg:p-6">
+            <div className="w-full px-4 py-4 lg:px-6 lg:py-6">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
                   <h1 className="truncate text-2xl font-semibold tracking-tight text-slate-900 lg:text-3xl">
@@ -414,10 +294,7 @@ function DashboardPage({ userProfile }) {
               <section className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <DashboardCard title="Today’s Overview">
                   {todaysOverview.map((item) => (
-                    <div
-                      key={item.title}
-                      className="flex items-start gap-3 rounded-xl px-1 py-2"
-                    >
+                    <div key={item.title} className="flex items-start gap-3 rounded-xl px-1 py-2">
                       <span className="mt-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-50 text-slate-400 ring-1 ring-slate-200">
                         <Clock3 size={13} aria-hidden="true" />
                       </span>
@@ -433,9 +310,7 @@ function DashboardPage({ userProfile }) {
                       <Circle size={12} fill="currentColor" aria-hidden="true" />
                     </span>
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-medium text-slate-800">
-                        Follow-Up with Acme Corp
-                      </p>
+                      <p className="text-sm font-medium text-slate-800">Follow-Up with Acme Corp</p>
                       <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
                         Due Today
                       </span>
@@ -444,25 +319,11 @@ function DashboardPage({ userProfile }) {
                 </DashboardCard>
 
                 <DashboardCard title="Upcoming Meetings">
-                  {isMeetingsLoading && (
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600">
-                      Loading meetings...
-                    </div>
-                  )}
-
-                  {!isMeetingsLoading && meetingsError && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-4 text-sm text-amber-700">
-                      {meetingsError}
-                    </div>
-                  )}
-
-                  {!isMeetingsLoading && !meetingsError && normalizedUpcomingMeetings.map((meeting, index) => (
+                  {upcomingMeetings.map((meeting, index) => (
                     <div
                       key={meeting.id}
                       className={`flex items-start gap-3 px-1 py-2 ${
-                        index !== normalizedUpcomingMeetings.length - 1
-                          ? 'border-b border-slate-100'
-                          : ''
+                        index !== upcomingMeetings.length - 1 ? 'border-b border-slate-100' : ''
                       }`}
                     >
                       <span className="mt-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-50 text-slate-400 ring-1 ring-slate-200">
@@ -471,12 +332,6 @@ function DashboardPage({ userProfile }) {
                       <p className="text-sm font-medium text-slate-800">{meeting.display}</p>
                     </div>
                   ))}
-
-                  {!isMeetingsLoading && !meetingsError && normalizedUpcomingMeetings.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-600">
-                      No meetings scheduled yet.
-                    </div>
-                  )}
                 </DashboardCard>
               </section>
 
@@ -488,7 +343,7 @@ function DashboardPage({ userProfile }) {
                   error={recentAIDraftsError}
                   userId={userProfile?.authUserId}
                   userProfile={userProfile}
-                  meetings={meetings}
+                  meetings={[]}
                   onDraftPatched={handleDraftPatched}
                 />
               </section>
@@ -496,38 +351,14 @@ function DashboardPage({ userProfile }) {
           </main>
         </div>
 
-        <aside
-          style={{ '--ai-panel-width': `${aiPanelWidth}px` }}
-          className={`relative w-full border-t border-slate-200 bg-white lg:h-full lg:w-[var(--ai-panel-width)] lg:flex-shrink-0 lg:border-t-0 lg:border-l ${
-            isResizingAiPanel
-              ? 'lg:transition-none'
-              : 'lg:transition-[width] lg:duration-150'
-          }`}
-        >
-          <button
-            type="button"
-            aria-label="Resize AI assistant panel"
-            onMouseDown={startAiPanelResize}
-            className={`absolute inset-y-0 left-0 hidden w-2 -translate-x-1/2 cursor-col-resize items-center justify-center lg:flex ${
-              isResizingAiPanel ? 'z-30' : 'z-20'
-            }`}
-          >
-            <span
-              className={`h-full w-px transition-colors duration-150 ${
-                isResizingAiPanel
-                  ? 'bg-indigo-300 shadow-[0_0_10px_rgba(99,102,241,0.35)]'
-                  : 'bg-slate-200 hover:bg-slate-300'
-              }`}
-            />
-          </button>
-
+        <aside className="hidden border-l border-slate-200 bg-white xl:block xl:w-80 xl:flex-shrink-0">
           <AIAssistantPanel
             commandAction={commandAction}
             userId={userProfile?.authUserId}
             userProfile={userProfile}
-            meetings={meetings}
-            isMeetingsLoading={isMeetingsLoading}
-            meetingsError={meetingsError}
+            meetings={[]}
+            isMeetingsLoading={false}
+            meetingsError=""
           />
         </aside>
       </div>

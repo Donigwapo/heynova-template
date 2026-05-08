@@ -6,6 +6,41 @@ import { sendFollowUpDraft } from '../lib/followUpSendService'
 import AIModalShell from './AIModalShell'
 import DashboardCard from './DashboardCard'
 
+const EMPTY_LIST = []
+
+function areEntityMapsEquivalent(previousMap = {}, nextMap = {}) {
+  const previousKeys = Object.keys(previousMap)
+  const nextKeys = Object.keys(nextMap)
+
+  if (previousKeys.length !== nextKeys.length) return false
+
+  for (const key of nextKeys) {
+    const previousItem = previousMap[key]
+    const nextItem = nextMap[key]
+
+    if (!previousItem || !nextItem) return false
+
+    const previousSignature = `${
+      previousItem.id || key
+    }::${previousItem.updated_at || previousItem.name || previousItem.full_name || previousItem.title || ''}`
+
+    const nextSignature = `${nextItem.id || key}::${
+      nextItem.updated_at || nextItem.name || nextItem.full_name || nextItem.title || ''
+    }`
+
+    if (previousSignature !== nextSignature) return false
+  }
+
+  return true
+}
+
+function areContextMapsEquivalent(previousValue, nextValue) {
+  return (
+    areEntityMapsEquivalent(previousValue?.contactsById, nextValue?.contactsById) &&
+    areEntityMapsEquivalent(previousValue?.meetingsById, nextValue?.meetingsById)
+  )
+}
+
 function formatDraftTimestamp(value) {
   if (!value) return 'Unknown time'
 
@@ -76,8 +111,8 @@ function RecentAIDraftsCard({
   error,
   userId,
   userProfile,
-  contacts = [],
-  meetings = [],
+  contacts = EMPTY_LIST,
+  meetings = EMPTY_LIST,
   onDraftPatched,
 }) {
   const [selectedDraftId, setSelectedDraftId] = useState(null)
@@ -127,34 +162,72 @@ function RecentAIDraftsCard({
 
       if (!userId || (contactsMissingIds.length === 0 && meetingsMissingIds.length === 0)) {
         if (!isMounted) return
-        setDraftContextMap({
+
+        const nextContext = {
           contactsById: contactsByIdFromProps,
           meetingsById: meetingsByIdFromProps,
+        }
+
+        setDraftContextMap((previousValue) => {
+          if (areContextMapsEquivalent(previousValue, nextContext)) {
+            return previousValue
+          }
+
+          return nextContext
         })
         return
       }
 
-      const [{ contacts: fetchedContacts }, { meetings: fetchedMeetings }] = await Promise.all([
+      const [contactsResult, meetingsResult] = await Promise.all([
         fetchContactsByIdsForUser(userId, contactsMissingIds),
         fetchMeetingsByIdsForUser(userId, meetingsMissingIds),
       ])
 
       if (!isMounted) return
 
+      if (contactsResult?.error) {
+        console.error('[RecentAIDraftsCard] failed loading contacts context', {
+          table: 'contacts',
+          user_id: userId,
+          pathname: window.location.pathname,
+          error: contactsResult.error,
+        })
+      }
+
+      if (meetingsResult?.error) {
+        console.error('[RecentAIDraftsCard] failed loading meetings context', {
+          table: 'meetings',
+          user_id: userId,
+          pathname: window.location.pathname,
+          error: meetingsResult.error,
+        })
+      }
+
+      const fetchedContacts = contactsResult?.contacts || EMPTY_LIST
+      const fetchedMeetings = meetingsResult?.meetings || EMPTY_LIST
+
       const contactsById = { ...contactsByIdFromProps }
       const meetingsById = { ...meetingsByIdFromProps }
 
-      ;(fetchedContacts || []).forEach((contact) => {
+      fetchedContacts.forEach((contact) => {
         if (!contact?.id) return
         contactsById[contact.id] = contact
       })
 
-      ;(fetchedMeetings || []).forEach((meeting) => {
+      fetchedMeetings.forEach((meeting) => {
         if (!meeting?.id) return
         meetingsById[meeting.id] = meeting
       })
 
-      setDraftContextMap({ contactsById, meetingsById })
+      const nextContext = { contactsById, meetingsById }
+
+      setDraftContextMap((previousValue) => {
+        if (areContextMapsEquivalent(previousValue, nextContext)) {
+          return previousValue
+        }
+
+        return nextContext
+      })
     }
 
     loadDraftContext()

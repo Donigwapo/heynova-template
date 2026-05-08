@@ -31,6 +31,10 @@ function statusBadgeClass(status) {
 }
 
 function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
+  console.log('[RouteTrace] LeadDatabaseDetailPage render', {
+    pathname: window.location.pathname,
+    userId: userProfile?.authUserId || null,
+  })
   const navigate = useNavigate()
   const { id } = useParams()
 
@@ -55,10 +59,7 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
       setIsLoading(true)
       setErrorMessage('')
 
-      const [listResult, itemsResult] = await Promise.all([
-        fetchLeadListById(id),
-        fetchLeadListItems(id),
-      ])
+      const [listResult, itemsResult] = await Promise.all([fetchLeadListById(id), fetchLeadListItems(id)])
 
       if (!isMounted) return
 
@@ -67,16 +68,20 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
           listError: listResult.error,
           itemsError: itemsResult.error,
           routeId: id,
+          pathname: window.location.pathname,
         })
-        setRow(null)
-        setLeadItems([])
-        setErrorMessage('Unable to load this lead list right now.')
-        setIsLoading(false)
-        return
       }
 
+      // Non-fatal: allow detail page shell to render even if one optional query fails.
       setRow(listResult.row || null)
       setLeadItems(itemsResult.rows || [])
+
+      if (listResult.error && !listResult.row) {
+        setErrorMessage('Unable to load this lead list right now.')
+      } else {
+        setErrorMessage('')
+      }
+
       setIsLoading(false)
     }
 
@@ -86,8 +91,6 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
       isMounted = false
     }
   }, [id])
-
-  console.log('[LeadDatabaseDetailPage] route param id', id)
 
   return (
     <div className="h-full bg-slate-50 text-slate-900">
@@ -113,9 +116,7 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
               {isLoading ? (
                 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                   <h1 className="text-xl font-semibold text-slate-900">Loading lead list...</h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Fetching list details and lead items.
-                  </p>
+                  <p className="mt-1 text-sm text-slate-500">Fetching list details and lead items.</p>
                 </section>
               ) : errorMessage ? (
                 <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">

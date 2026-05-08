@@ -1,3 +1,4 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 const suggestionFunctionName =
@@ -20,6 +21,7 @@ function pickMostRecentByTimestamp(rows, timestampKeys = []) {
 }
 
 export async function fetchContactSuggestionContexts({ userId, contactIds = [], meetings = [] }) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const normalizedIds = Array.from(new Set((contactIds || []).filter(Boolean)))
 
   if (!userId || normalizedIds.length === 0) {
@@ -104,6 +106,28 @@ export async function fetchContactSuggestionContexts({ userId, contactIds = [], 
   }
 
   const error = tasksError || draftsError
+
+  if (tasksError) {
+    logSupabaseQueryError({
+      table: 'tasks',
+      operation: 'select many',
+      userId,
+      pathname,
+      error: tasksError,
+      extra: { contactIdsCount: normalizedIds.length },
+    })
+  }
+
+  if (draftsError) {
+    logSupabaseQueryError({
+      table: 'ai_drafts',
+      operation: 'select many',
+      userId,
+      pathname,
+      error: draftsError,
+      extra: { contactIdsCount: normalizedIds.length },
+    })
+  }
 
   return {
     contextsByContactId,

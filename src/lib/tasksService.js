@@ -1,3 +1,4 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 const DEFAULT_DUE_HOUR = 17
@@ -97,6 +98,7 @@ export async function saveAITasks({
   meetingId = null,
   sourceContext = {},
 }) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   if (!userId || !Array.isArray(tasks) || tasks.length === 0) {
     return { savedCount: 0, error: null, debug: null }
   }
@@ -217,6 +219,18 @@ export async function saveAITasks({
         },
       }
     }
+
+    logSupabaseQueryError({
+      table: 'tasks',
+      operation: `insert strategy:${strategy.name}`,
+      userId,
+      pathname,
+      error,
+      extra: {
+        attemptedFields,
+        rows: strategy.rows.length,
+      },
+    })
 
     attempts.push({
       strategy: strategy.name,

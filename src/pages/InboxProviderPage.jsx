@@ -124,6 +124,12 @@ function InboxProviderPage({ userProfile, onRunCommand = () => {} }) {
   const { provider } = useParams()
   const navigate = useNavigate()
 
+  console.log('[RouteTrace] InboxProviderPage render', {
+    pathname: window.location.pathname,
+    provider,
+    userId: userProfile?.authUserId || null,
+  })
+
   const [classifiedEmails, setClassifiedEmails] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -146,6 +152,16 @@ function InboxProviderPage({ userProfile, onRunCommand = () => {} }) {
       const { connection, error: connectionError } = await fetchGmailConnection()
 
       if (!isMounted) return
+
+      if (connectionError) {
+        console.error('[InboxProviderPage] Gmail connection check failed', {
+          table: 'integration_connections',
+          user_id: userProfile?.authUserId || null,
+          pathname: window.location.pathname,
+          provider: 'gmail',
+          error: connectionError,
+        })
+      }
 
       const connected = Boolean(connection && connection.status === 'connected')
 

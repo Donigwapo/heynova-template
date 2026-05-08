@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import { fetchProfileByUserId } from './lib/profileService'
 import { supabase } from './lib/supabase'
@@ -12,8 +12,12 @@ import LoginPage from './pages/LoginPage'
 import LeadExtractorPage from './pages/LeadExtractorPage'
 import LeadDatabasePage from './pages/LeadDatabasePage'
 import LeadDatabaseDetailPage from './pages/LeadDatabaseDetailPage'
+import CampaignManagerPage from './pages/CampaignManagerPage'
+import CampaignManagerDetailPage from './pages/CampaignManagerDetailPage'
 
 function App() {
+  const location = useLocation()
+  const previousPathnameRef = useRef(location.pathname)
   const [session, setSession] = useState(null)
   const [profileRow, setProfileRow] = useState(null)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
@@ -34,7 +38,14 @@ function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      console.log('[RouteTrace] onAuthStateChange', {
+        event,
+        hasNextSession: Boolean(nextSession),
+        nextUserId: nextSession?.user?.id || null,
+        pathname: window.location.pathname,
+      })
+
       setSession(nextSession)
       setIsAuthLoading(false)
     })
@@ -103,6 +114,22 @@ function App() {
     )
   }
 
+  if (previousPathnameRef.current !== location.pathname) {
+    console.log('[RouteTrace] pathname changed', {
+      from: previousPathnameRef.current,
+      to: location.pathname,
+    })
+    previousPathnameRef.current = location.pathname
+  }
+
+  console.log('[RouteTrace] App render', {
+    pathname: location.pathname,
+    isAuthLoading,
+    hasSession: Boolean(session),
+    hasProfileRow: Boolean(profileRow),
+    isProfileLoading,
+  })
+
   return (
     <Routes>
       <Route
@@ -169,6 +196,24 @@ function App() {
         element={
           <ProtectedRoute isAuthenticated={isAuthenticated}>
             <LeadDatabaseDetailPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/manager"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <CampaignManagerPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/manager/:campaignId"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <CampaignManagerDetailPage userProfile={userProfile} />
           </ProtectedRoute>
         }
       />

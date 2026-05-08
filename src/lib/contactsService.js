@@ -1,6 +1,9 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 export async function fetchContactsByUserId(userId) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+
   if (!userId) {
     return { contacts: [], error: null }
   }
@@ -12,6 +15,13 @@ export async function fetchContactsByUserId(userId) {
     .order('updated_at', { ascending: false })
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'contacts',
+      operation: 'select many',
+      userId,
+      pathname,
+      error,
+    })
     return { contacts: [], error }
   }
 
@@ -19,6 +29,8 @@ export async function fetchContactsByUserId(userId) {
 }
 
 export async function fetchContactsByIdsForUser(userId, contactIds) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
+
   if (!userId || !Array.isArray(contactIds) || contactIds.length === 0) {
     return { contacts: [], error: null }
   }
@@ -30,6 +42,14 @@ export async function fetchContactsByIdsForUser(userId, contactIds) {
     .in('id', contactIds)
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'contacts',
+      operation: 'select many by ids',
+      userId,
+      pathname,
+      error,
+      extra: { contactIdsCount: contactIds.length },
+    })
     return { contacts: [], error }
   }
 

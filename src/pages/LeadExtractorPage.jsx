@@ -155,6 +155,11 @@ function FilterCard({ children }) {
 
 function LeadExtractorPage({ userProfile, onRunCommand = () => {} }) {
   const navigate = useNavigate()
+
+  console.log('[RouteTrace] LeadExtractorPage render', {
+    pathname: window.location.pathname,
+    userId: userProfile?.authUserId || null,
+  })
   const [filters, setFilters] = useState(defaultFilters)
   const [hasSearched, setHasSearched] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
@@ -212,6 +217,10 @@ function LeadExtractorPage({ userProfile, onRunCommand = () => {} }) {
   }
 
   const handleSearch = async (event) => {
+    console.log('[RouteTrace] LeadExtractorPage action: handleSearch start', {
+      pathname: window.location.pathname,
+      userId: userProfile?.authUserId || null,
+    })
     if (event) event.preventDefault()
     if (isSearching) return
 
@@ -255,6 +264,11 @@ function LeadExtractorPage({ userProfile, onRunCommand = () => {} }) {
       setSelectedLead(null)
       setIsLeadPanelOpen(false)
     } catch (error) {
+      console.error('[RouteTrace] LeadExtractorPage handleSearch error', {
+        pathname: window.location.pathname,
+        message: error?.message || 'Unknown error',
+        details: error,
+      })
       console.error('[Lead Extractor] Search request failed', error)
       setResults([])
       setSelectedLeadIds([])

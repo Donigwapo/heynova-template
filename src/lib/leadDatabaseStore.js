@@ -1,3 +1,4 @@
+import { logSupabaseQueryError } from './queryLogger'
 import { supabase } from './supabase'
 
 function toUiList(row) {
@@ -26,14 +27,26 @@ function toUiLead(row) {
 }
 
 async function resolveCurrentUserId() {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const { data, error } = await supabase.auth.getUser()
   if (error || !data?.user?.id) {
+    if (error) {
+      logSupabaseQueryError({
+        table: 'auth.users',
+        operation: 'getUser',
+        userId: null,
+        pathname,
+        error,
+      })
+    }
+
     return { userId: null, error: error || new Error('Unable to resolve authenticated user.') }
   }
   return { userId: data.user.id, error: null }
 }
 
 export async function fetchLeadLists() {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const { userId, error: authError } = await resolveCurrentUserId()
   if (authError || !userId) {
     return { rows: [], error: authError || new Error('Unauthorized.') }
@@ -46,6 +59,13 @@ export async function fetchLeadLists() {
     .order('created_at', { ascending: false })
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'lead_lists',
+      operation: 'select many',
+      userId,
+      pathname,
+      error,
+    })
     return { rows: [], error }
   }
 
@@ -53,6 +73,7 @@ export async function fetchLeadLists() {
 }
 
 export async function fetchLeadListById(id) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const { userId, error: authError } = await resolveCurrentUserId()
   if (authError || !userId) {
     return { row: null, error: authError || new Error('Unauthorized.') }
@@ -66,6 +87,14 @@ export async function fetchLeadListById(id) {
     .maybeSingle()
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'lead_lists',
+      operation: 'select maybeSingle',
+      userId,
+      pathname,
+      error,
+      extra: { id },
+    })
     return { row: null, error }
   }
 
@@ -73,6 +102,7 @@ export async function fetchLeadListById(id) {
 }
 
 export async function fetchLeadListItems(leadListId) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const { userId, error: authError } = await resolveCurrentUserId()
   if (authError || !userId) {
     return { rows: [], error: authError || new Error('Unauthorized.') }
@@ -87,6 +117,14 @@ export async function fetchLeadListItems(leadListId) {
     .order('created_at', { ascending: false })
 
   if (error) {
+    logSupabaseQueryError({
+      table: 'lead_list_items',
+      operation: 'select many',
+      userId,
+      pathname,
+      error,
+      extra: { leadListId },
+    })
     return { rows: [], error }
   }
 
@@ -94,6 +132,7 @@ export async function fetchLeadListItems(leadListId) {
 }
 
 export async function createLeadListWithItems(params) {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : null
   const { name, leads, status = 'Completed' } = params
 
   const { userId, error: authError } = await resolveCurrentUserId()
@@ -112,9 +151,20 @@ export async function createLeadListWithItems(params) {
       leads_count: normalizedLeads.length,
     })
     .select('id')
-    .single()
+    .maybeSingle()
 
   if (listError || !listRow?.id) {
+    if (listError) {
+      logSupabaseQueryError({
+        table: 'lead_lists',
+        operation: 'insert maybeSingle',
+        userId,
+        pathname,
+        error: listError,
+        extra: { name, status, leads_count: normalizedLeads.length },
+      })
+    }
+
     return { id: null, error: listError || new Error('Unable to create lead list.') }
   }
 
@@ -147,6 +197,14 @@ export async function createLeadListWithItems(params) {
     const { error: itemError } = await supabase.from('lead_list_items').insert(itemRows)
     if (itemError) {
       console.error('lead_list_items insert error:', itemError)
+      logSupabaseQueryError({
+        table: 'lead_list_items',
+        operation: 'insert many',
+        userId,
+        pathname,
+        error: itemError,
+        extra: { lead_list_id: listRow.id, rows: itemRows.length },
+      })
       return { id: null, error: itemError }
     }
   }
