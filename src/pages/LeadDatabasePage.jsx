@@ -46,10 +46,6 @@ function LeadDatabasePage({ userProfile, onRunCommand = () => {} }) {
   const [selectedLeadList, setSelectedLeadList] = useState(null)
 
   function handleAddToCampaignClick(list) {
-    console.log('[AddToCampaign] button click fired', {
-      leadListId: list?.id || null,
-      leadListName: list?.name || null,
-    })
     setSelectedLeadList(list)
     setShowAddToCampaignModal(true)
   }
@@ -91,14 +87,6 @@ function LeadDatabasePage({ userProfile, onRunCommand = () => {} }) {
       isMounted = false
     }
   }, [])
-
-  useEffect(() => {
-    console.log('[AddToCampaign] modal open state changed', {
-      isOpen: showAddToCampaignModal,
-      selectedLeadListId: selectedLeadList?.id || null,
-      selectedLeadListName: selectedLeadList?.name || null,
-    })
-  }, [showAddToCampaignModal, selectedLeadList])
 
   const visibleRows = useMemo(() => {
     if (!query.trim()) return rows

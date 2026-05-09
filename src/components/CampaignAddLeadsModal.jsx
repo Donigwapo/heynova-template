@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AIModalShell from './AIModalShell'
 import { fetchCampaignsByUserId, createCampaign, addLeadsToCampaign } from '../lib/campaignsService'
 import { fetchLeadListItems } from '../lib/leadDatabaseStore'
@@ -10,12 +11,7 @@ function CampaignAddLeadsModal({
   userId,
   onSuccess,
 }) {
-  console.log('[AddToCampaign] CampaignAddLeadsModal render', {
-    isOpen,
-    leadListId: leadList?.id || null,
-    leadListName: leadList?.name || null,
-    userId: userId || null,
-  })
+  const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState([])
   const [campaignsLoading, setCampaignsLoading] = useState(true)
   const [campaignId, setCampaignId] = useState('')
@@ -90,6 +86,7 @@ function CampaignAddLeadsModal({
     setIsSubmitting(false)
     onSuccess && onSuccess(insertCount, finalCampaignName)
     onClose && onClose()
+    navigate(`/campaigns/workflows/new?campaignId=${encodeURIComponent(finalCampaignId)}`)
   }
 
   return (

@@ -14,6 +14,8 @@ import LeadDatabasePage from './pages/LeadDatabasePage'
 import LeadDatabaseDetailPage from './pages/LeadDatabaseDetailPage'
 import CampaignManagerPage from './pages/CampaignManagerPage'
 import CampaignManagerDetailPage from './pages/CampaignManagerDetailPage'
+import CampaignWorkflowsPage from './pages/CampaignWorkflowsPage'
+import CampaignWorkflowBuilderPage from './pages/CampaignWorkflowBuilderPage'
 
 function App() {
   const location = useLocation()
@@ -214,6 +216,33 @@ function App() {
         element={
           <ProtectedRoute isAuthenticated={isAuthenticated}>
             <CampaignManagerDetailPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/workflows"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <CampaignWorkflowsPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/workflows/new"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <CampaignWorkflowBuilderPage userProfile={userProfile} />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/campaigns/workflows/:workflowId"
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <CampaignWorkflowBuilderPage userProfile={userProfile} />
           </ProtectedRoute>
         }
       />

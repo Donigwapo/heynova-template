@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import TopHeader from '../components/TopHeader'
 import { fetchCampaignsWithMetrics } from '../lib/campaignsService'
+import { fetchWorkflowMapByCampaignIds } from '../lib/workflowsService'
 
 function formatDate(value) {
   if (!value) return '—'
@@ -26,6 +27,7 @@ function statusBadgeClass(status) {
 function CampaignManagerPage({ userProfile, onRunCommand = () => {} }) {
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState([])
+  const [workflowByCampaignId, setWorkflowByCampaignId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
 
@@ -47,12 +49,35 @@ function CampaignManagerPage({ userProfile, onRunCommand = () => {} }) {
           error,
         })
         setCampaigns([])
+        setWorkflowByCampaignId({})
         setErrorMessage('Unable to load campaign data right now.')
         setIsLoading(false)
         return
       }
 
-      setCampaigns(rows || [])
+      const normalizedRows = rows || []
+      setCampaigns(normalizedRows)
+
+      const campaignIds = normalizedRows.map((row) => row.id).filter(Boolean)
+      const { map: workflowMap, error: workflowMapError } = await fetchWorkflowMapByCampaignIds({
+        userId: userProfile?.authUserId,
+        campaignIds,
+      })
+
+      if (!isMounted) return
+
+      if (workflowMapError) {
+        console.error('[CampaignManagerPage] Unable to load workflow map', {
+          table: 'workflows',
+          user_id: userProfile?.authUserId || null,
+          pathname: window.location.pathname,
+          error: workflowMapError,
+        })
+        setWorkflowByCampaignId({})
+      } else {
+        setWorkflowByCampaignId(workflowMap || {})
+      }
+
       setIsLoading(false)
     }
 
@@ -176,13 +201,38 @@ function CampaignManagerPage({ userProfile, onRunCommand = () => {} }) {
                             <td className="px-2 py-3 text-slate-700">{campaign.convertedLeads || 0}</td>
                             <td className="px-2 py-3 text-slate-600">{formatDate(campaign.createdAt)}</td>
                             <td className="px-2 py-3">
-                              <button
-                                type="button"
-                                onClick={() => navigate(`/campaigns/manager/${campaign.id}`)}
-                                className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700"
-                              >
-                                View
-                              </button>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => navigate(`/campaigns/manager/${campaign.id}`)}
+                                  className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700"
+                                >
+                                  View
+                                </button>
+                                {workflowByCampaignId[campaign.id]?.id ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      navigate(`/campaigns/workflows/${workflowByCampaignId[campaign.id].id}`)
+                                    }
+                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Edit Workflow
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      navigate(
+                                        `/campaigns/workflows/new?campaignId=${encodeURIComponent(campaign.id)}`
+                                      )
+                                    }
+                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Build Workflow
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}

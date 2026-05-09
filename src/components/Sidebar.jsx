@@ -33,6 +33,7 @@ const campaignItems = [
   { label: 'Lead Extractor', route: '/campaigns/lead-extractor' },
   { label: 'Lead Database', route: '/campaigns/lead-database' },
   { label: 'Campaign Manager', route: '/campaigns/manager' },
+  { label: 'Workflows', route: '/campaigns/workflows' },
 ]
 
 function Sidebar({ activeItem = 'Dashboard', userProfile }) {
