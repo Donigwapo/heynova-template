@@ -33,6 +33,17 @@ function normalizeLead(raw, index) {
       ? raw.linkedin_profile_url.trim()
       : null
 
+  const emailRaw =
+    (typeof raw?.email === 'string' && raw.email.trim()) ||
+    (typeof raw?.email_address === 'string' && raw.email_address.trim()) ||
+    (typeof raw?.work_email === 'string' && raw.work_email.trim()) ||
+    null
+
+  const phoneRaw =
+    (typeof raw?.phone === 'string' && raw.phone.trim()) ||
+    (typeof raw?.phone_number === 'string' && raw.phone_number.trim()) ||
+    null
+
   return {
     id: linkedinUrl || `${fullName.replace(/\s+/g, '-').toLowerCase()}-${index}`,
     linkedinUrl,
@@ -48,6 +59,30 @@ function normalizeLead(raw, index) {
       typeof raw?.profile_summary === 'string' && raw.profile_summary.trim()
         ? raw.profile_summary.trim()
         : 'No summary available',
+    email: emailRaw,
+    phone: phoneRaw,
+    emailStatus:
+      typeof raw?.email_status === 'string' && raw.email_status.trim()
+        ? raw.email_status.trim()
+        : 'unknown',
+    emailConfidence:
+      typeof raw?.email_confidence === 'number'
+        ? raw.email_confidence
+        : typeof raw?.email_confidence === 'string' && raw.email_confidence.trim()
+          ? Number(raw.email_confidence)
+          : null,
+    phoneStatus:
+      typeof raw?.phone_status === 'string' && raw.phone_status.trim()
+        ? raw.phone_status.trim()
+        : 'unknown',
+    contactSource:
+      typeof raw?.contact_source === 'string' && raw.contact_source.trim()
+        ? raw.contact_source.trim()
+        : 'lead_extractor',
+    enrichmentMetadata:
+      raw?.enrichment_metadata && typeof raw.enrichment_metadata === 'object'
+        ? raw.enrichment_metadata
+        : {},
     status: typeof raw?.status === 'string' && raw.status.trim() ? raw.status.trim() : '—',
     _index: index,
   }

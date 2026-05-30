@@ -22,6 +22,19 @@ function toUiLead(row) {
     companyName: row.company_name || '—',
     location: row.location || '—',
     profileSummary: row.profile_summary || 'No summary available',
+    email: row.email || null,
+    phone: row.phone || null,
+    emailStatus: row.email_status || 'unknown',
+    emailConfidence:
+      row.email_confidence === null || row.email_confidence === undefined
+        ? null
+        : Number(row.email_confidence),
+    phoneStatus: row.phone_status || 'unknown',
+    contactSource: row.contact_source || null,
+    enrichmentMetadata:
+      row.enrichment_metadata && typeof row.enrichment_metadata === 'object'
+        ? row.enrichment_metadata
+        : {},
     status: row.status || '—',
   }
 }
@@ -111,7 +124,7 @@ export async function fetchLeadListItems(leadListId) {
   const { data, error } = await supabase
     .from('lead_list_items')
     .select(
-      'id,linkedin_url,full_name,first_name,last_name,job_title,company_name,location,profile_summary,status,created_at'
+      'id,linkedin_url,full_name,first_name,last_name,job_title,company_name,location,profile_summary,email,phone,email_status,email_confidence,phone_status,contact_source,enrichment_metadata,status,created_at'
     )
     .eq('lead_list_id', leadListId)
     .order('created_at', { ascending: false })
@@ -183,6 +196,23 @@ export async function createLeadListWithItems(params) {
         (lead.profileSummary || lead.profile_summary) === 'No summary available'
           ? null
           : lead.profileSummary || lead.profile_summary || null,
+      email: lead.email || lead.email_address || lead.work_email || null,
+      phone: lead.phone || lead.phone_number || null,
+      email_status: lead.emailStatus || lead.email_status || null,
+      email_confidence:
+        lead.emailConfidence !== undefined && lead.emailConfidence !== null
+          ? Number(lead.emailConfidence)
+          : lead.email_confidence !== undefined && lead.email_confidence !== null
+            ? Number(lead.email_confidence)
+            : null,
+      phone_status: lead.phoneStatus || lead.phone_status || null,
+      contact_source: lead.contactSource || lead.contact_source || null,
+      enrichment_metadata:
+        lead.enrichmentMetadata && typeof lead.enrichmentMetadata === 'object'
+          ? lead.enrichmentMetadata
+          : lead.enrichment_metadata && typeof lead.enrichment_metadata === 'object'
+            ? lead.enrichment_metadata
+            : {},
       status: lead.status === '—' ? null : lead.status || null,
     }))
 

@@ -157,6 +157,8 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
                             <th className="px-2 py-2">Name</th>
                             <th className="px-2 py-2">Job Title</th>
                             <th className="px-2 py-2">Company</th>
+                            <th className="px-2 py-2">Email</th>
+                            <th className="px-2 py-2">Phone</th>
                             <th className="px-2 py-2">Location</th>
                             <th className="px-2 py-2">Summary</th>
                             <th className="px-2 py-2">Status</th>
@@ -170,6 +172,8 @@ function LeadDatabaseDetailPage({ userProfile, onRunCommand = () => {} }) {
                               <td className="px-2 py-3 font-medium text-slate-800">{lead.fullName || '—'}</td>
                               <td className="px-2 py-3 text-slate-700">{lead.jobTitle || '—'}</td>
                               <td className="px-2 py-3 text-slate-700">{lead.companyName || '—'}</td>
+                              <td className="px-2 py-3 text-slate-700">{lead.email || '—'}</td>
+                              <td className="px-2 py-3 text-slate-700">{lead.phone || '—'}</td>
                               <td className="px-2 py-3 text-slate-700">{lead.location || '—'}</td>
                               <td className="max-w-[20rem] px-2 py-3 text-slate-600">
                                 <p className="line-clamp-2">{lead.profileSummary || 'No summary available'}</p>

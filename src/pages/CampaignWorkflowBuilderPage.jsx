@@ -1,5 +1,5 @@
 import { Bot, FlaskConical, PauseCircle, PlayCircle, Plus, Rocket, Save, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   closestCenter,
@@ -19,8 +19,8 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import Sidebar from '../components/Sidebar'
 import TopHeader from '../components/TopHeader'
-import WorkflowStepCard from '../components/WorkflowStepCard'
-import { fetchCampaignsByUserId } from '../lib/campaignsService'
+import WorkflowStepNode from '../components/WorkflowStepNode'
+import { fetchCampaignsByUserId, fetchSingleCampaignLeadForEmailTest } from '../lib/campaignsService'
 import {
   createWorkflowWithDefaultSteps,
   fetchWorkflowByCampaignId,
@@ -29,12 +29,34 @@ import {
   replaceWorkflowSteps,
   updateWorkflow,
 } from '../lib/workflowsService'
+import { sendWorkflowTestEmail } from '../lib/workflowEmailTestService'
+import {
+  buildWorkflowEmailIdempotencyKey,
+  fetchOutboxByIdempotencyKey,
+  markOutboxFailed,
+  markOutboxSent,
+  upsertOutboxInProgress,
+} from '../lib/workflowDeliveryOutboxService'
+import { enqueueWorkflowEmailJobsOnActivate } from '../lib/workflowOutboxQueueService'
+
+const COPILOT_COLLAPSE_STORAGE_KEY = 'heynova.workflow.aiCopilotCollapsed'
 
 const stepTypeOptions = [
   { value: 'email', label: 'Email' },
   { value: 'linkedin', label: 'LinkedIn' },
   { value: 'wait', label: 'Wait' },
+  { value: 'condition', label: 'Condition / Branch' },
   { value: 'ai_action', label: 'AI Action' },
+  { value: 'stop', label: 'Stop' },
+]
+
+const quickNodeTypes = [
+  { value: 'email', label: 'Send Email' },
+  { value: 'linkedin', label: 'LinkedIn Action' },
+  { value: 'wait', label: 'Wait' },
+  { value: 'condition', label: 'Condition / Branch' },
+  { value: 'ai_action', label: 'AI Action' },
+  { value: 'stop', label: 'Stop' },
 ]
 
 const aiTemplatePrompts = [
@@ -73,15 +95,31 @@ function createStepByType({ stepType, stepOrder, delayDays = 0 }) {
   const typeLabel =
     type === 'ai_action'
       ? 'AI Action'
-      : stepTypeOptions.find((option) => option.value === type)?.label || 'Email'
+      : type === 'condition'
+        ? 'Condition / Branch'
+        : type === 'linkedin'
+          ? 'LinkedIn Action'
+          : type === 'wait'
+            ? 'Wait'
+            : type === 'stop'
+              ? 'Stop'
+              : 'Send Email'
 
   return {
     stepOrder,
     stepType: type,
-    delayDays,
-    subject: `${typeLabel} Step`,
+    delayDays: type === 'wait' ? delayDays || 1 : delayDays,
+    subject: `${typeLabel} Node`,
     body: '',
-    metadata: {},
+    metadata:
+      type === 'condition'
+        ? {
+            conditionLabel: 'Did lead reply?',
+            yesLabel: 'Yes',
+            noLabel: 'No',
+            branchingPhase: 'visual-foundation',
+          }
+        : {},
   }
 }
 
@@ -91,7 +129,7 @@ function normalizeStepOrder(list) {
     .sort((a, b) => Number(a.stepOrder || 0) - Number(b.stepOrder || 0))
 }
 
-function SortableWorkflowStep({
+function SortableWorkflowNode({
   item,
   index,
   isExpanded,
@@ -111,7 +149,7 @@ function SortableWorkflowStep({
 
   return (
     <div ref={setNodeRef} style={style} className="relative">
-      <WorkflowStepCard
+      <WorkflowStepNode
         step={item.step}
         index={index}
         isExpanded={isExpanded}
@@ -122,6 +160,57 @@ function SortableWorkflowStep({
         stepTypeOptions={stepTypeOptions}
         dragHandleProps={{ ...attributes, ...listeners }}
       />
+    </div>
+  )
+}
+
+function AddNodeMenu({ onAdd }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Add Action</p>
+      <div className="flex flex-wrap items-center gap-1">
+        {quickNodeTypes.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onAdd(item.value)}
+            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ZoomControls({ zoom, onZoomIn, onZoomOut, onReset }) {
+  return (
+    <div className="absolute left-3 top-3 z-10 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur">
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={onZoomIn}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={onZoomOut}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          -
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          100%
+        </button>
+      </div>
+      <p className="mt-1 text-center text-[10px] font-medium text-slate-500">{Math.round(zoom * 100)}%</p>
     </div>
   )
 }
@@ -145,6 +234,12 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
 
   const [aiPrompt, setAiPrompt] = useState('')
   const [activeDragId, setActiveDragId] = useState(null)
+  const [isAICopilotCollapsed, setIsAICopilotCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(COPILOT_COLLAPSE_STORAGE_KEY) === '1'
+  })
+
+  const [zoom, setZoom] = useState(1)
 
   const isEditMode = Boolean(workflowId)
 
@@ -156,6 +251,11 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(COPILOT_COLLAPSE_STORAGE_KEY, isAICopilotCollapsed ? '1' : '0')
+  }, [isAICopilotCollapsed])
 
   useEffect(() => {
     let isMounted = true
@@ -428,14 +528,292 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
       return
     }
 
+    if ((nextStatus || workflow.status) === 'active') {
+      const { queuedCount, requeuedCount, skippedCount, error: enqueueError } =
+        await enqueueWorkflowEmailJobsOnActivate({
+          workflowId: workflow.id,
+          userId: userProfile.authUserId,
+          campaignId: updatedWorkflow.campaignId,
+        })
+
+      if (enqueueError) {
+        setErrorMessage(`Workflow saved, but enqueue failed: ${enqueueError.message || 'Unknown enqueue error.'}`)
+        setWorkflow(updatedWorkflow)
+        setIsSaving(false)
+        return
+      }
+
+      setWorkflow(updatedWorkflow)
+      setSaveMessage(
+        `Workflow activated. Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}.`
+      )
+      setIsSaving(false)
+      return
+    }
+
     setWorkflow(updatedWorkflow)
     setSaveMessage('Workflow saved successfully.')
     setIsSaving(false)
   }
 
+  async function handleTestWorkflowEmailSend() {
+    setErrorMessage('')
+    setSaveMessage('')
+
+    const userId = userProfile?.authUserId || null
+    const workflowIdValue = workflow?.id || null
+    const campaignId = workflow?.campaignId || null
+
+    console.log('[WorkflowEmailTest] test start', {
+      userId,
+      workflowId: workflowIdValue,
+      campaignId,
+      stepsCount: normalizedSteps.length,
+    })
+
+    if (!userId) {
+      console.error('[WorkflowEmailTest] auth/JWT issue: missing user id in session')
+      setErrorMessage('Please sign in again before sending a workflow test email.')
+      return
+    }
+
+    if (!campaignId) {
+      console.error('[WorkflowEmailTest] missing campaign id on workflow')
+      setErrorMessage('Connect this workflow to a campaign before running test email send.')
+      return
+    }
+
+    const emailStep = normalizedSteps.find(
+      (step) => String(step.stepType || '').toLowerCase() === 'email'
+    )
+
+    if (!emailStep) {
+      console.error('[WorkflowEmailTest] workflow step parsing: no email step found')
+      setErrorMessage('No email step found in this workflow. Add an email step first.')
+      return
+    }
+
+    if (!emailStep?.id) {
+      console.error('[WorkflowEmailTest][Outbox] missing stable workflow_step_id for idempotency', {
+        workflowId: workflowIdValue,
+        emailStepId: emailStep?.id || null,
+      })
+      setErrorMessage('Please save the workflow before testing.')
+      return
+    }
+
+    const subject = String(emailStep.subject || '').trim()
+    const text = String(emailStep.body || '').trim()
+
+    if (!subject || !text) {
+      console.error('[WorkflowEmailTest] workflow step parsing: subject/body missing', {
+        hasSubject: Boolean(subject),
+        hasBody: Boolean(text),
+      })
+      setErrorMessage('Email step subject and body are required for test send.')
+      return
+    }
+
+    console.log('[WorkflowEmailTest] resolving campaign lead for test send', {
+      userId,
+      campaignId,
+    })
+
+    const { lead, error: leadError } = await fetchSingleCampaignLeadForEmailTest({ campaignId, userId })
+
+    if (leadError) {
+      console.error('[WorkflowEmailTest] missing campaign lead email: query failure', {
+        campaignId,
+        userId,
+        error: leadError,
+      })
+      setErrorMessage('Unable to load campaign lead email for test send.')
+      return
+    }
+
+    if (!lead?.email) {
+      console.error('[WorkflowEmailTest] missing campaign lead email: no eligible lead', {
+        campaignId,
+        userId,
+      })
+      setErrorMessage('No campaign lead with a valid email found for test send.')
+      return
+    }
+
+    const channel = 'email'
+
+    const idempotencyKey = await buildWorkflowEmailIdempotencyKey({
+      userId,
+      workflowId: workflowIdValue,
+      workflowStepId: emailStep.id,
+      campaignLeadId: lead.id,
+      channel,
+    })
+
+    const { row: existingOutbox, error: outboxLookupError } = await fetchOutboxByIdempotencyKey({
+      userId,
+      idempotencyKey,
+    })
+
+    if (outboxLookupError) {
+      console.error('[WorkflowEmailTest][Outbox] lookup failed', {
+        userId,
+        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
+        error: outboxLookupError,
+      })
+      setErrorMessage('Unable to verify delivery outbox state before test send.')
+      return
+    }
+
+    if (existingOutbox && (existingOutbox.status === 'sent' || existingOutbox.status === 'in_progress')) {
+      console.warn('[WorkflowEmailTest][Outbox] duplicate prevented', {
+        outboxId: existingOutbox.id,
+        status: existingOutbox.status,
+        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
+      })
+      setSaveMessage('Duplicate test send prevented. This workflow step was already sent (or is in progress).')
+      return
+    }
+
+    const payloadSnapshot = {
+      to: lead.email,
+      subject,
+      text,
+      workflowId: workflowIdValue,
+      workflowStepId: emailStep.id,
+      campaignLeadId: lead.id,
+      campaignId,
+      channel,
+      mode: 'manual_test',
+    }
+
+    const { row: inProgressRow, error: outboxInProgressError } = await upsertOutboxInProgress({
+      userId,
+      workflowId: workflowIdValue,
+      workflowStepId: emailStep.id,
+      campaignId,
+      campaignLeadId: lead.id,
+      channel,
+      idempotencyKey,
+      payload: payloadSnapshot,
+    })
+
+    if (outboxInProgressError || !inProgressRow?.id) {
+      console.error('[WorkflowEmailTest][Outbox] unable to mark in_progress', {
+        userId,
+        workflowId: workflowIdValue,
+        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
+        error: outboxInProgressError,
+      })
+      setErrorMessage('Unable to initialize outbox delivery row for test send.')
+      return
+    }
+
+    console.log('[WorkflowEmailTest] invoking gmail-send edge function', {
+      to: lead.email,
+      workflowId: workflowIdValue,
+      emailStepId: emailStep.id || null,
+      outboxId: inProgressRow.id,
+    })
+
+    const sendResult = await sendWorkflowTestEmail({
+      to: lead.email,
+      subject,
+      text,
+    })
+
+    if (!sendResult.ok) {
+      const errorCode = sendResult.errorCode || 'send_failed'
+
+      await markOutboxFailed({
+        userId,
+        outboxId: inProgressRow.id,
+        errorCode,
+        errorMessage: sendResult.message,
+        previousAttemptCount: Number(inProgressRow.attempt_count || 0),
+      })
+
+      console.error('[WorkflowEmailTest] gmail-send function failure', {
+        errorCode,
+        message: sendResult.message,
+        raw: sendResult.raw,
+      })
+      setErrorMessage(`Test email failed (${errorCode}): ${sendResult.message}`)
+      return
+    }
+
+    await markOutboxSent({
+      userId,
+      outboxId: inProgressRow.id,
+      providerMessageId: sendResult.providerMessageId,
+      previousAttemptCount: Number(inProgressRow.attempt_count || 0),
+    })
+
+    console.log('[WorkflowEmailTest] send success', {
+      to: lead.email,
+      providerMessageId: sendResult.providerMessageId,
+      outboxId: inProgressRow.id,
+    })
+
+    setSaveMessage(
+      `Test email sent to ${lead.email}${sendResult.providerMessageId ? ` (id: ${sendResult.providerMessageId})` : ''}.`
+    )
+  }
+
   function handleTemplateApply(templatePrompt) {
     setAiPrompt(templatePrompt)
   }
+
+  const handleZoomIn = useCallback(() => {
+    setZoom((prev) => Math.min(1.8, Number((prev + 0.1).toFixed(2))))
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    setZoom((prev) => Math.max(0.6, Number((prev - 0.1).toFixed(2))))
+  }, [])
+
+  const handleZoomReset = useCallback(() => {
+    setZoom(1)
+  }, [])
+
+  useEffect(() => {
+    function isEditableTarget(target) {
+      if (!target || !(target instanceof HTMLElement)) return false
+
+      const tag = target.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+      if (target.isContentEditable) return true
+      if (target.closest('[contenteditable="true"]')) return true
+
+      return false
+    }
+
+    function onKeyDown(event) {
+      if (event.defaultPrevented) return
+      if (isEditableTarget(event.target)) return
+
+      const key = event.key
+      if (key === '+' || key === '=') {
+        event.preventDefault()
+        handleZoomIn()
+        return
+      }
+
+      if (key === '-') {
+        event.preventDefault()
+        handleZoomOut()
+        return
+      }
+
+      if (key === '0') {
+        event.preventDefault()
+        handleZoomReset()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleZoomIn, handleZoomOut, handleZoomReset])
 
   return (
     <div className="h-full bg-slate-50 text-slate-900">
@@ -447,7 +825,7 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
         <div className="flex min-h-0 flex-1 flex-col">
           <TopHeader onRunCommand={onRunCommand} userProfile={userProfile} />
 
-          <main className="flex-1 overflow-auto bg-gradient-to-b from-slate-50 to-slate-100/50">
+          <main className="relative flex-1 overflow-auto bg-gradient-to-b from-slate-50 to-slate-100/50">
             <div className="w-full px-2 py-3 sm:px-3 lg:px-4 lg:py-4">
               {isLoading ? (
                 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -458,269 +836,295 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
                   <p className="text-sm text-slate-600">Workflow unavailable.</p>
                 </section>
               ) : (
-                <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(280px,28%)_minmax(0,72%)]">
-                  <aside className="space-y-3 xl:sticky xl:top-3 xl:self-start">
-                    <section className="rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 via-white to-indigo-50 p-4 shadow-sm">
-                      <div className="mb-3 flex items-start gap-2">
-                        <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-100 p-2 text-fuchsia-700">
-                          <Sparkles size={18} />
-                        </div>
-                        <div>
-                          <h2 className="text-base font-semibold text-slate-900">AI Workflow Generator</h2>
-                          <p className="text-sm text-slate-600">
-                            Describe what you want to achieve. Heynova helps scaffold your automation.
-                          </p>
-                        </div>
-                      </div>
+                <>
+                  {isAICopilotCollapsed && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAICopilotCollapsed(false)}
+                      className="fixed right-4 top-28 z-20 rounded-lg border border-fuchsia-200 bg-white px-3 py-1.5 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-50"
+                    >
+                      {'>>'} Show Copilot
+                    </button>
+                  )}
 
-                      <textarea
-                        rows={6}
-                        value={aiPrompt}
-                        onChange={(event) => setAiPrompt(event.target.value)}
-                        placeholder="Describe your outreach goal... e.g. Generate a 4-step workflow for real estate investor outreach"
-                        className="w-full rounded-xl border border-fuchsia-200 bg-white px-3 py-2 text-sm text-slate-800"
-                      />
-
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        {aiTemplatePrompts.map((template) => (
-                          <button
-                            key={template}
-                            type="button"
-                            onClick={() => handleTemplateApply(template)}
-                            className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
-                          >
-                            {template}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs text-slate-500">
-                          AI suggestions and generation states can plug in here.
-                        </p>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded-lg border border-fuchsia-200 bg-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-fuchsia-700"
-                        >
-                          <Bot size={14} /> Generate Workflow
-                        </button>
-                      </div>
-                    </section>
-
-                    {errorMessage && (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                        {errorMessage}
-                      </div>
-                    )}
-
-                    {saveMessage && (
-                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                        {saveMessage}
-                      </div>
-                    )}
-                  </aside>
-
-                  <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
-                    <header className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h2 className="text-lg font-semibold text-slate-900">Automation Timeline Canvas</h2>
-                          <p className="text-sm text-slate-500">Build and orchestrate your sequence flow</p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
+                  <div className="flex flex-col gap-3 xl:flex-row">
+                    <aside
+                      className={`overflow-hidden transition-all duration-300 ease-out ${
+                        isAICopilotCollapsed
+                          ? 'pointer-events-none w-0 opacity-0'
+                          : 'w-full opacity-100 xl:w-[clamp(280px,28%,420px)]'
+                      }`}
+                    >
+                      <section className="rounded-2xl border border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 via-white to-indigo-50 p-4 shadow-sm">
+                        <div className="mb-3 flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2">
+                            <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-100 p-2 text-fuchsia-700">
+                              <Sparkles size={18} />
+                            </div>
+                            <div>
+                              <h2 className="text-base font-semibold text-slate-900">AI Workflow Generator</h2>
+                              <p className="text-sm text-slate-600">
+                                Describe what you want to achieve. Heynova helps scaffold your automation.
+                              </p>
+                            </div>
+                          </div>
                           <button
                             type="button"
-                            onClick={() => saveWorkflowWithStatus('draft')}
-                            disabled={isSaving || !workflow?.id}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:bg-slate-100"
+                            onClick={() => setIsAICopilotCollapsed(true)}
+                            className="rounded-lg border border-fuchsia-200 bg-white px-2 py-1 text-xs font-semibold text-fuchsia-700 hover:bg-fuchsia-50"
                           >
-                            <Save size={13} /> Save Draft
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => saveWorkflowWithStatus('paused')}
-                            disabled={isSaving || !workflow?.id}
-                            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:bg-amber-50/60"
-                          >
-                            <PauseCircle size={13} /> Pause
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSaveMessage('Test Workflow is coming soon.')}
-                            disabled={!workflow?.id}
-                            className="inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:bg-violet-50/60"
-                          >
-                            <FlaskConical size={13} /> Test
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => saveWorkflowWithStatus('active')}
-                            disabled={isSaving || !workflow?.id}
-                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:bg-emerald-50/60"
-                          >
-                            <PlayCircle size={13} /> Activate
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => saveWorkflowWithStatus('active')}
-                            disabled={isSaving || !workflow?.id}
-                            className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-indigo-300"
-                          >
-                            <Rocket size={13} /> Publish
+                            {'<<'} Hide
                           </button>
                         </div>
-                      </div>
 
-                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                        <input
-                          value={workflow?.name || ''}
-                          onChange={(event) =>
-                            setWorkflow((previous) => ({
-                              ...previous,
-                              name: event.target.value,
-                            }))
-                          }
-                          placeholder="Workflow name"
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
+                        <textarea
+                          rows={6}
+                          value={aiPrompt}
+                          onChange={(event) => setAiPrompt(event.target.value)}
+                          placeholder="Describe your outreach goal... e.g. Generate a 4-step workflow for real estate investor outreach"
+                          className="w-full rounded-xl border border-fuchsia-200 bg-white px-3 py-2 text-sm text-slate-800"
                         />
 
-                        <select
-                          value={selectedCampaignId}
-                          onChange={(event) => {
-                            const nextCampaignId = event.target.value || null
-                            setWorkflow((previous) => ({
-                              ...previous,
-                              campaignId: nextCampaignId,
-                            }))
-
-                            const nextCampaign = campaignOptions.find((item) => item.id === nextCampaignId)
-                            setCampaignName(nextCampaign?.name || 'Not linked')
-                          }}
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
-                        >
-                          <option value="">Campaign: Not linked</option>
-                          {campaignOptions.map((campaign) => (
-                            <option key={campaign.id} value={campaign.id}>
-                              Campaign: {campaign.name}
-                            </option>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          {aiTemplatePrompts.map((template) => (
+                            <button
+                              key={template}
+                              type="button"
+                              onClick={() => handleTemplateApply(template)}
+                              className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
+                            >
+                              {template}
+                            </button>
                           ))}
-                        </select>
-
-                        <select
-                          value={workflow?.status || 'draft'}
-                          onChange={(event) =>
-                            setWorkflow((previous) => ({
-                              ...previous,
-                              status: event.target.value,
-                            }))
-                          }
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
-                        >
-                          <option value="draft">Status: Draft</option>
-                          <option value="active">Status: Active</option>
-                          <option value="paused">Status: Paused</option>
-                          <option value="completed">Status: Completed</option>
-                        </select>
-                      </div>
-
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-medium ${statusBadgeClass(workflow?.status)}`}>
-                          {workflow?.status || 'draft'}
-                        </span>
-                        <span>{campaignName || 'Not linked'}</span>
-                        <span>•</span>
-                        <span>{normalizedSteps.length} steps</span>
-                        <span>•</span>
-                        <span>Last edited {formatDate(workflow?.updatedAt)}</span>
-                      </div>
-                    </header>
-
-                    <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50/80 px-3 py-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Trigger</p>
-                      <p className="mt-0.5 text-sm font-medium text-indigo-900">
-                        Manual Start • Launch when your campaign is ready
-                      </p>
-                    </div>
-
-                    <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                      {stepTypeOptions.map((insertType) => (
-                        <button
-                          key={insertType.value}
-                          type="button"
-                          onClick={() => addStep(insertType.value)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          <Plus size={13} /> {insertType.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="relative space-y-2 pl-0 sm:pl-8">
-                      <div className="absolute bottom-0 left-[0.68rem] top-0 hidden w-px bg-gradient-to-b from-indigo-100 via-slate-300 to-indigo-100 sm:block" />
-
-                      {normalizedSteps.length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                          No steps yet. Add your first automation step.
                         </div>
-                      ) : (
-                        <DndContext
-                          sensors={sensors}
-                          collisionDetection={closestCenter}
-                          onDragStart={handleDragStart}
-                          onDragEnd={handleDragEnd}
-                          onDragCancel={() => setActiveDragId(null)}
-                        >
-                          <SortableContext
-                            items={stepItems.map((item) => item.dragId)}
-                            strategy={verticalListSortingStrategy}
-                          >
-                            <div className="space-y-2">
-                              {stepItems.map((item, index) => (
-                                <div key={item.dragId} className="space-y-2">
-                                  <SortableWorkflowStep
-                                    item={item}
-                                    index={index}
-                                    isExpanded={expandedStepKey === `step-${index}`}
-                                    onToggle={() =>
-                                      setExpandedStepKey((current) =>
-                                        current === `step-${index}` ? 'none' : `step-${index}`
-                                      )
-                                    }
-                                    onChange={(patch) => updateStepAtIndex(index, patch)}
-                                    onRemove={() => removeStepAtIndex(index)}
-                                    stepTypeOptions={stepTypeOptions}
-                                  />
 
-                                  <div className="pl-0 sm:pl-6">
-                                    <div
-                                      className={`flex flex-wrap items-center gap-1 rounded-lg border px-2 py-1 transition-all ${
-                                        activeDragId
-                                          ? 'border-indigo-200 bg-indigo-50/40'
-                                          : 'border-slate-200 bg-slate-50/70'
-                                      }`}
-                                    >
-                                      <span className="text-[11px] font-medium text-slate-500">Insert below:</span>
-                                      {stepTypeOptions.map((insertType) => (
-                                        <button
-                                          key={`${item.dragId}-${insertType.value}`}
-                                          type="button"
-                                          onClick={() => insertStepAt(index + 1, insertType.value)}
-                                          className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
-                                        >
-                                          + {insertType.label}
-                                        </button>
-                                      ))}
-                                    </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-slate-500">
+                            AI suggestions and generation states can plug in here.
+                          </p>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-lg border border-fuchsia-200 bg-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-fuchsia-700"
+                          >
+                            <Bot size={14} /> Generate Workflow
+                          </button>
+                        </div>
+                      </section>
+
+                      {errorMessage && (
+                        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                          {errorMessage}
+                        </div>
+                      )}
+
+                      {saveMessage && (
+                        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                          {saveMessage}
+                        </div>
+                      )}
+                    </aside>
+
+                    <section className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition-all duration-300 ease-out sm:p-4">
+                      <header className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h2 className="text-lg font-semibold text-slate-900">Automation Node Canvas</h2>
+                            <p className="text-sm text-slate-500">Compose automation as connected action nodes</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => saveWorkflowWithStatus('draft')}
+                              disabled={isSaving || !workflow?.id}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:bg-slate-100"
+                            >
+                              <Save size={13} /> Save Draft
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveWorkflowWithStatus('paused')}
+                              disabled={isSaving || !workflow?.id}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:bg-amber-50/60"
+                            >
+                              <PauseCircle size={13} /> Pause
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleTestWorkflowEmailSend}
+                              disabled={!workflow?.id || isSaving}
+                              className="inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:bg-violet-50/60"
+                            >
+                              <FlaskConical size={13} /> Test
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveWorkflowWithStatus('active')}
+                              disabled={isSaving || !workflow?.id}
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:bg-emerald-50/60"
+                            >
+                              <PlayCircle size={13} /> Activate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveWorkflowWithStatus('active')}
+                              disabled={isSaving || !workflow?.id}
+                              className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+                            >
+                              <Rocket size={13} /> Publish
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                          <input
+                            value={workflow?.name || ''}
+                            onChange={(event) =>
+                              setWorkflow((previous) => ({
+                                ...previous,
+                                name: event.target.value,
+                              }))
+                            }
+                            placeholder="Workflow name"
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
+                          />
+
+                          <select
+                            value={selectedCampaignId}
+                            onChange={(event) => {
+                              const nextCampaignId = event.target.value || null
+                              setWorkflow((previous) => ({
+                                ...previous,
+                                campaignId: nextCampaignId,
+                              }))
+
+                              const nextCampaign = campaignOptions.find((item) => item.id === nextCampaignId)
+                              setCampaignName(nextCampaign?.name || 'Not linked')
+                            }}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
+                          >
+                            <option value="">Campaign: Not linked</option>
+                            {campaignOptions.map((campaign) => (
+                              <option key={campaign.id} value={campaign.id}>
+                                Campaign: {campaign.name}
+                              </option>
+                            ))}
+                          </select>
+
+                          <select
+                            value={workflow?.status || 'draft'}
+                            onChange={(event) =>
+                              setWorkflow((previous) => ({
+                                ...previous,
+                                status: event.target.value,
+                              }))
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800"
+                          >
+                            <option value="draft">Status: Draft</option>
+                            <option value="active">Status: Active</option>
+                            <option value="paused">Status: Paused</option>
+                            <option value="completed">Status: Completed</option>
+                          </select>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-medium ${statusBadgeClass(workflow?.status)}`}>
+                            {workflow?.status || 'draft'}
+                          </span>
+                          <span>{campaignName || 'Not linked'}</span>
+                          <span>•</span>
+                          <span>{normalizedSteps.length} nodes</span>
+                          <span>•</span>
+                          <span>Last edited {formatDate(workflow?.updatedAt)}</span>
+                        </div>
+                      </header>
+
+                      <div className="relative rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4">
+                        <ZoomControls
+                          zoom={zoom}
+                          onZoomIn={handleZoomIn}
+                          onZoomOut={handleZoomOut}
+                          onReset={handleZoomReset}
+                        />
+
+                        <div className="min-h-[560px] overflow-auto rounded-lg border border-dashed border-slate-300 bg-white">
+                          <div
+                            className="origin-top transition-transform duration-200 ease-out"
+                            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+                          >
+                            <div className="mx-auto w-full max-w-3xl px-4 py-8">
+                              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/90 px-3 py-2 text-center">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Trigger / Start</p>
+                                <p className="mt-0.5 text-sm font-medium text-indigo-900">Manual Start</p>
+                              </div>
+
+                              <div className="mx-auto h-6 w-px bg-slate-300" />
+
+                              {normalizedSteps.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                                  No nodes yet. Add your first action below.
+                                  <div className="mt-3">
+                                    <AddNodeMenu onAdd={(type) => addStep(type)} />
                                   </div>
                                 </div>
-                              ))}
+                              ) : (
+                                <DndContext
+                                  sensors={sensors}
+                                  collisionDetection={closestCenter}
+                                  onDragStart={handleDragStart}
+                                  onDragEnd={handleDragEnd}
+                                  onDragCancel={() => setActiveDragId(null)}
+                                >
+                                  <SortableContext
+                                    items={stepItems.map((item) => item.dragId)}
+                                    strategy={verticalListSortingStrategy}
+                                  >
+                                    <div className="space-y-0">
+                                      {stepItems.map((item, index) => (
+                                        <div key={item.dragId} className="flex flex-col items-center">
+                                          <SortableWorkflowNode
+                                            item={item}
+                                            index={index}
+                                            isExpanded={expandedStepKey === `step-${index}`}
+                                            onToggle={() =>
+                                              setExpandedStepKey((current) =>
+                                                current === `step-${index}` ? 'none' : `step-${index}`
+                                              )
+                                            }
+                                            onChange={(patch) => updateStepAtIndex(index, patch)}
+                                            onRemove={() => removeStepAtIndex(index)}
+                                            stepTypeOptions={stepTypeOptions}
+                                          />
+
+                                          <div className="mt-2 mb-1 h-5 w-px bg-slate-300" />
+
+                                          <div
+                                            className={`mb-2 w-full transition-all ${
+                                              activeDragId ? 'opacity-70' : 'opacity-100'
+                                            }`}
+                                          >
+                                            <AddNodeMenu onAdd={(type) => insertStepAt(index + 1, type)} />
+                                          </div>
+
+                                          <div className="mb-1 h-3 w-px bg-slate-300" />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </SortableContext>
+                                </DndContext>
+                              )}
+
+                              <div className="mx-auto mt-2 rounded-2xl border border-rose-200 bg-rose-50/80 px-3 py-2 text-center">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Stop / End</p>
+                                <p className="mt-0.5 text-sm font-medium text-rose-900">Flow Completed</p>
+                              </div>
                             </div>
-                          </SortableContext>
-                        </DndContext>
-                      )}
-                    </div>
-                  </section>
-                </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </>
               )}
             </div>
           </main>

@@ -538,7 +538,27 @@ async function sendViaGmail(accessToken: string, rawBase64Url: string) {
 }
 
 Deno.serve(async (req) => {
+  const startedAt = new Date().toISOString()
+  const origin = req.headers.get('origin') || null
+  const authHeader = req.headers.get('authorization') || ''
+
+  console.log('[gmail-send] invocation start', {
+    timestamp: startedAt,
+    method: req.method,
+    origin,
+    pathname: new URL(req.url).pathname,
+    hasAuthorizationHeader: authHeader.startsWith('Bearer '),
+    hasApiKeyHeader: Boolean(req.headers.get('apikey')),
+    userAgent: req.headers.get('user-agent') || null,
+  })
+
   if (req.method === 'OPTIONS') {
+    console.log('[gmail-send] OPTIONS preflight handled', {
+      timestamp: new Date().toISOString(),
+      origin,
+      allowOrigin: CORS_HEADERS['Access-Control-Allow-Origin'],
+      allowHeaders: CORS_HEADERS['Access-Control-Allow-Headers'],
+    })
     return new Response('ok', { headers: CORS_HEADERS })
   }
 
@@ -737,6 +757,8 @@ Deno.serve(async (req) => {
       status: 'failed',
       error_code: 'internal_error',
       message,
+      stack: error instanceof Error ? error.stack || null : null,
+      timestamp: new Date().toISOString(),
     })
 
     return jsonResponse(errorResult('internal_error', 'Unhandled send error.'), 500)
