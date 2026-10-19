@@ -1,0 +1,19 @@
+services:
+  native_email_scheduler:
+    image: node:20-alpine
+    container_name: heynova_native_email_scheduler
+    working_dir: /app
+    volumes:
+      - ./:/app:ro
+    command: ["node", "scheduler/native-email-scheduler.js"]
+    environment:
+      NATIVE_EMAIL_SCHEDULER_ENABLED: "false"
+      NATIVE_EMAIL_SCHEDULER_EXECUTE: "false"
+      NATIVE_EMAIL_SCHEDULER_MODE: "interval"
+      NATIVE_EMAIL_SCHEDULER_INTERVAL_MS: "60000"
+      NATIVE_EMAIL_SCHEDULER_TIMEOUT_MS: "15000"
+      NATIVE_EMAIL_SCHEDULER_FUNCTION: "workflow-email-native-worker"
+      NATIVE_EMAIL_SCHEDULER_LOCK_PATH: "/tmp/heynova-native-email-scheduler.lock"
+      SUPABASE_URL: ""
+      SCHEDULER_SERVICE_ROLE_TOKEN: ""
+    restart: unless-stopped
