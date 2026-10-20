@@ -38,6 +38,7 @@ import {
   upsertOutboxInProgress,
 } from '../lib/workflowDeliveryOutboxService'
 import { enqueueWorkflowEmailJobsOnActivate } from '../lib/workflowOutboxQueueService'
+import { syncWorkflowActivationShadow } from '../lib/workflowExecutionShadowService'
 
 const COPILOT_COLLAPSE_STORAGE_KEY = 'heynova.workflow.aiCopilotCollapsed'
 
@@ -543,10 +544,29 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
         return
       }
 
-      setWorkflow(updatedWorkflow)
-      setSaveMessage(
+      // Activation sync is best-effort and must never block enqueue-based activation.
+      const shadowResult = await syncWorkflowActivationShadow({
+        workflowId: workflow.id,
+        campaignId: updatedWorkflow.campaignId,
+      })
+
+      let activationMessage =
         `Workflow activated. Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}.`
-      )
+
+      if (!shadowResult.ok) {
+        console.warn('[WorkflowShadow] activation sync invocation failed (non-blocking)', {
+          workflowId: workflow.id,
+          campaignId: updatedWorkflow.campaignId,
+          message: shadowResult.error?.message || 'Unknown shadow sync error',
+        })
+
+        activationMessage =
+          `Workflow activated and emails queued, but execution sync did not complete. ` +
+          `Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}.`
+      }
+
+      setWorkflow(updatedWorkflow)
+      setSaveMessage(activationMessage)
       setIsSaving(false)
       return
     }
