@@ -22,7 +22,6 @@ import TopHeader from '../components/TopHeader'
 import WorkflowStepNode from '../components/WorkflowStepNode'
 import { fetchCampaignsByUserId, fetchSingleCampaignLeadForEmailTest } from '../lib/campaignsService'
 import {
-  createWorkflowWithDefaultSteps,
   fetchWorkflowByCampaignId,
   fetchWorkflowDetail,
   getDefaultWorkflowSteps,
@@ -30,14 +29,8 @@ import {
   updateWorkflow,
 } from '../lib/workflowsService'
 import { sendWorkflowTestEmail } from '../lib/workflowEmailTestService'
-import {
-  buildWorkflowEmailIdempotencyKey,
-  fetchOutboxByIdempotencyKey,
-  markOutboxFailed,
-  markOutboxSent,
-  upsertOutboxInProgress,
-} from '../lib/workflowDeliveryOutboxService'
 import { enqueueWorkflowEmailJobsOnActivate } from '../lib/workflowOutboxQueueService'
+import { syncWorkflowActivationShadow } from '../lib/workflowExecutionShadowService'
 
 const COPILOT_COLLAPSE_STORAGE_KEY = 'heynova.workflow.aiCopilotCollapsed'
 
@@ -86,7 +79,7 @@ function formatDate(value) {
   })
 }
 
-function createStepByType({ stepType, stepOrder, delayDays = 0 }) {
+function createStepByType({ stepType, stepOrder, delayDays = 0, metadata = null }) {
   const normalizedType = String(stepType || '').toLowerCase()
   const type = stepTypeOptions.some((option) => option.value === normalizedType)
     ? normalizedType
@@ -105,6 +98,9 @@ function createStepByType({ stepType, stepOrder, delayDays = 0 }) {
               ? 'Stop'
               : 'Send Email'
 
+  const baseMetadata =
+    metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}
+
   return {
     stepOrder,
     stepType: type,
@@ -118,8 +114,11 @@ function createStepByType({ stepType, stepOrder, delayDays = 0 }) {
             yesLabel: 'Yes',
             noLabel: 'No',
             branchingPhase: 'visual-foundation',
+            ...baseMetadata,
           }
-        : {},
+        : {
+            ...baseMetadata,
+          },
   }
 }
 
@@ -137,6 +136,8 @@ function SortableWorkflowNode({
   onChange,
   onRemove,
   stepTypeOptions,
+  onOpenYesBranchMenu,
+  onOpenNoBranchMenu,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.dragId,
@@ -158,28 +159,65 @@ function SortableWorkflowNode({
         onChange={onChange}
         onRemove={onRemove}
         stepTypeOptions={stepTypeOptions}
+        onOpenYesBranchMenu={onOpenYesBranchMenu}
+        onOpenNoBranchMenu={onOpenNoBranchMenu}
         dragHandleProps={{ ...attributes, ...listeners }}
       />
     </div>
   )
 }
 
-function AddNodeMenu({ onAdd }) {
+function AddNodePopover({ isOpen, onAdd, onClose, align = 'center' }) {
+  if (!isOpen) return null
+
+  const alignClass =
+    align === 'left'
+      ? 'left-0'
+      : align === 'right'
+        ? 'right-0'
+        : 'left-1/2 -translate-x-1/2'
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
-      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Add Action</p>
-      <div className="flex flex-wrap items-center gap-1">
-        {quickNodeTypes.map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => onAdd(item.value)}
-            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
-          >
-            {item.label}
-          </button>
-        ))}
+    <div className={`absolute z-30 mt-2 w-52 ${alignClass}`}>
+      <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+        <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Add Action</p>
+        <div className="flex flex-col gap-1">
+          {quickNodeTypes.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => {
+                onAdd(item.value)
+                onClose?.()
+              }}
+              className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-[12px] font-medium text-slate-700 hover:bg-slate-100"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
+    </div>
+  )
+}
+
+function ConnectorAddButton({ menuOpen, onToggle, onAdd, onClose, align = 'center' }) {
+  return (
+    <div data-insert-menu-root="true" className="relative flex flex-col items-center">
+      <button
+        type="button"
+        aria-label="Add action"
+        onClick={onToggle}
+        className={`group inline-flex h-8 w-8 items-center justify-center rounded-full border text-sm font-bold shadow-sm transition-all ${
+          menuOpen
+            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-100'
+            : 'border-slate-300 bg-white text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700'
+        }`}
+      >
+        <Plus size={14} />
+      </button>
+
+      <AddNodePopover isOpen={menuOpen} onAdd={onAdd} onClose={onClose} align={align} />
     </div>
   )
 }
@@ -240,6 +278,7 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
   })
 
   const [zoom, setZoom] = useState(1)
+  const [openInsertMenuKey, setOpenInsertMenuKey] = useState(null)
 
   const isEditMode = Boolean(workflowId)
 
@@ -359,34 +398,13 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
         }
       }
 
-      const initialCampaignName =
-        campaignOptions.find((campaign) => campaign.id === campaignId)?.name ||
-        (campaignId ? 'Campaign' : 'Not linked')
-
-      const workflowName = campaignId ? `${initialCampaignName} Workflow` : 'New Workflow'
-
-      const { workflow: createdWorkflow, error: createError } = await createWorkflowWithDefaultSteps({
-        userId: userProfile.authUserId,
-        campaignId,
-        name: workflowName,
-      })
-
-      if (!isMounted) return
-
-      if (createError || !createdWorkflow) {
-        setErrorMessage('Unable to create a workflow draft right now.')
-        setWorkflow(null)
-        setSteps([])
-        setIsLoading(false)
-        return
-      }
-
-      setWorkflow(createdWorkflow)
-      setSteps(normalizeStepOrder(getDefaultWorkflowSteps()))
-      setExpandedStepKey('step-0')
-      setCampaignName(initialCampaignName || 'Not linked')
+      setWorkflow(null)
+      setSteps([])
+      setCampaignName('Not linked')
       setIsLoading(false)
-      navigate(`/campaigns/workflows/${createdWorkflow.id}`, { replace: true })
+      navigate(campaignId ? `/campaigns/workflows?campaignId=${encodeURIComponent(campaignId)}` : '/campaigns/workflows', {
+        replace: true,
+      })
     }
 
     loadBuilderState()
@@ -433,11 +451,20 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
     })
   }
 
-  function insertStepAt(index, stepType = 'email') {
+  function insertStepAt(index, stepType = 'email', options = {}) {
     setSteps((previous) => {
       const next = [...previous]
       const delayTemplate = index === 0 ? 0 : Number(next[index - 1]?.delayDays || 0)
-      next.splice(index, 0, createStepByType({ stepType, stepOrder: index + 1, delayDays: delayTemplate }))
+      next.splice(
+        index,
+        0,
+        createStepByType({
+          stepType,
+          stepOrder: index + 1,
+          delayDays: delayTemplate,
+          metadata: options?.metadata || null,
+        })
+      )
       const normalized = normalizeStepOrder(next)
       setExpandedStepKey(`step-${index}`)
       return normalized
@@ -529,7 +556,7 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
     }
 
     if ((nextStatus || workflow.status) === 'active') {
-      const { queuedCount, requeuedCount, skippedCount, error: enqueueError } =
+      const { queuedCount, requeuedCount, skippedCount, skippedActiveRunCount, error: enqueueError } =
         await enqueueWorkflowEmailJobsOnActivate({
           workflowId: workflow.id,
           userId: userProfile.authUserId,
@@ -543,10 +570,55 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
         return
       }
 
+      // Phase 2A.3 shadow sync is best-effort and must never block legacy execution.
+      const shadowResult = await syncWorkflowActivationShadow({
+        workflowId: workflow.id,
+        campaignId: updatedWorkflow.campaignId,
+      })
+
+      const activeSkipSegment = skippedActiveRunCount > 0 ? `, skipped active executions: ${skippedActiveRunCount}` : ''
+      let activationMessage = `Workflow activated. Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}${activeSkipSegment}.`
+
+      if (!shadowResult.ok) {
+        console.warn('[WorkflowShadow] activation sync invocation failed (non-blocking)', {
+          workflowId: workflow.id,
+          campaignId: updatedWorkflow.campaignId,
+          message: shadowResult.error?.message || 'Unknown shadow sync error',
+        })
+
+        activationMessage =
+          `Workflow activated and emails queued, but execution sync did not complete. ` +
+          `Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}${activeSkipSegment}.`
+      } else {
+        const processed = Number(shadowResult.data?.processed || 0)
+        const failures = Array.isArray(shadowResult.data?.failures) ? shadowResult.data.failures : []
+        const failureCount = failures.length
+
+        if (failureCount > 0) {
+          console.warn('[WorkflowShadow] activation sync completed with row-level failures (non-blocking)', {
+            workflowId: workflow.id,
+            campaignId: updatedWorkflow.campaignId,
+            workflowVersionId: shadowResult.data?.workflowVersionId || null,
+            processed,
+            failureCount,
+          })
+
+          activationMessage =
+            `Workflow activated and emails queued, but execution sync encountered ${failureCount} issue(s). ` +
+            `Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}${activeSkipSegment}.`
+        } else {
+          console.log('[WorkflowShadow] activation sync complete', {
+            workflowId: workflow.id,
+            campaignId: updatedWorkflow.campaignId,
+            workflowVersionId: shadowResult.data?.workflowVersionId || null,
+            processed,
+            failureCount,
+          })
+        }
+      }
+
       setWorkflow(updatedWorkflow)
-      setSaveMessage(
-        `Workflow activated. Outbox queued: ${queuedCount}, re-queued failed: ${requeuedCount}, skipped: ${skippedCount}.`
-      )
+      setSaveMessage(activationMessage)
       setIsSaving(false)
       return
     }
@@ -594,7 +666,7 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
     }
 
     if (!emailStep?.id) {
-      console.error('[WorkflowEmailTest][Outbox] missing stable workflow_step_id for idempotency', {
+      console.error('[WorkflowEmailTest][Manual] missing stable workflow_step_id', {
         workflowId: workflowIdValue,
         emailStepId: emailStep?.id || null,
       })
@@ -640,80 +712,10 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
       return
     }
 
-    const channel = 'email'
-
-    const idempotencyKey = await buildWorkflowEmailIdempotencyKey({
-      userId,
-      workflowId: workflowIdValue,
-      workflowStepId: emailStep.id,
-      campaignLeadId: lead.id,
-      channel,
-    })
-
-    const { row: existingOutbox, error: outboxLookupError } = await fetchOutboxByIdempotencyKey({
-      userId,
-      idempotencyKey,
-    })
-
-    if (outboxLookupError) {
-      console.error('[WorkflowEmailTest][Outbox] lookup failed', {
-        userId,
-        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
-        error: outboxLookupError,
-      })
-      setErrorMessage('Unable to verify delivery outbox state before test send.')
-      return
-    }
-
-    if (existingOutbox && (existingOutbox.status === 'sent' || existingOutbox.status === 'in_progress')) {
-      console.warn('[WorkflowEmailTest][Outbox] duplicate prevented', {
-        outboxId: existingOutbox.id,
-        status: existingOutbox.status,
-        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
-      })
-      setSaveMessage('Duplicate test send prevented. This workflow step was already sent (or is in progress).')
-      return
-    }
-
-    const payloadSnapshot = {
-      to: lead.email,
-      subject,
-      text,
-      workflowId: workflowIdValue,
-      workflowStepId: emailStep.id,
-      campaignLeadId: lead.id,
-      campaignId,
-      channel,
-      mode: 'manual_test',
-    }
-
-    const { row: inProgressRow, error: outboxInProgressError } = await upsertOutboxInProgress({
-      userId,
-      workflowId: workflowIdValue,
-      workflowStepId: emailStep.id,
-      campaignId,
-      campaignLeadId: lead.id,
-      channel,
-      idempotencyKey,
-      payload: payloadSnapshot,
-    })
-
-    if (outboxInProgressError || !inProgressRow?.id) {
-      console.error('[WorkflowEmailTest][Outbox] unable to mark in_progress', {
-        userId,
-        workflowId: workflowIdValue,
-        idempotencyKeyPrefix: idempotencyKey.slice(0, 16),
-        error: outboxInProgressError,
-      })
-      setErrorMessage('Unable to initialize outbox delivery row for test send.')
-      return
-    }
-
-    console.log('[WorkflowEmailTest] invoking gmail-send edge function', {
+    console.log('[WorkflowEmailTest][Manual] invoking gmail-send edge function', {
       to: lead.email,
       workflowId: workflowIdValue,
       emailStepId: emailStep.id || null,
-      outboxId: inProgressRow.id,
     })
 
     const sendResult = await sendWorkflowTestEmail({
@@ -725,15 +727,7 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
     if (!sendResult.ok) {
       const errorCode = sendResult.errorCode || 'send_failed'
 
-      await markOutboxFailed({
-        userId,
-        outboxId: inProgressRow.id,
-        errorCode,
-        errorMessage: sendResult.message,
-        previousAttemptCount: Number(inProgressRow.attempt_count || 0),
-      })
-
-      console.error('[WorkflowEmailTest] gmail-send function failure', {
+      console.error('[WorkflowEmailTest][Manual] gmail-send function failure', {
         errorCode,
         message: sendResult.message,
         raw: sendResult.raw,
@@ -742,17 +736,9 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
       return
     }
 
-    await markOutboxSent({
-      userId,
-      outboxId: inProgressRow.id,
-      providerMessageId: sendResult.providerMessageId,
-      previousAttemptCount: Number(inProgressRow.attempt_count || 0),
-    })
-
-    console.log('[WorkflowEmailTest] send success', {
+    console.log('[WorkflowEmailTest][Manual] send success', {
       to: lead.email,
       providerMessageId: sendResult.providerMessageId,
-      outboxId: inProgressRow.id,
     })
 
     setSaveMessage(
@@ -774,6 +760,29 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
 
   const handleZoomReset = useCallback(() => {
     setZoom(1)
+  }, [])
+
+  useEffect(() => {
+    function onGlobalPointerDown(event) {
+      const target = event?.target
+      if (!(target instanceof HTMLElement)) return
+      if (target.closest('[data-insert-menu-root="true"]')) return
+      setOpenInsertMenuKey(null)
+    }
+
+    function onGlobalEscape(event) {
+      if (event.key === 'Escape') {
+        setOpenInsertMenuKey(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', onGlobalPointerDown)
+    window.addEventListener('keydown', onGlobalEscape)
+
+    return () => {
+      window.removeEventListener('pointerdown', onGlobalPointerDown)
+      window.removeEventListener('keydown', onGlobalEscape)
+    }
   }, [])
 
   useEffect(() => {
@@ -1062,9 +1071,18 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
 
                               {normalizedSteps.length === 0 ? (
                                 <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                                  No nodes yet. Add your first action below.
-                                  <div className="mt-3">
-                                    <AddNodeMenu onAdd={(type) => addStep(type)} />
+                                  No nodes yet.
+                                  <div className="mt-3 flex justify-center">
+                                    <ConnectorAddButton
+                                      menuOpen={openInsertMenuKey === 'empty'}
+                                      onToggle={() =>
+                                        setOpenInsertMenuKey((current) =>
+                                          current === 'empty' ? null : 'empty'
+                                        )
+                                      }
+                                      onClose={() => setOpenInsertMenuKey(null)}
+                                      onAdd={(type) => addStep(type)}
+                                    />
                                   </div>
                                 </div>
                               ) : (
@@ -1080,39 +1098,225 @@ function CampaignWorkflowBuilderPage({ userProfile, onRunCommand = () => {} }) {
                                     strategy={verticalListSortingStrategy}
                                   >
                                     <div className="space-y-0">
-                                      {stepItems.map((item, index) => (
-                                        <div key={item.dragId} className="flex flex-col items-center">
-                                          <SortableWorkflowNode
-                                            item={item}
-                                            index={index}
-                                            isExpanded={expandedStepKey === `step-${index}`}
-                                            onToggle={() =>
-                                              setExpandedStepKey((current) =>
-                                                current === `step-${index}` ? 'none' : `step-${index}`
-                                              )
-                                            }
-                                            onChange={(patch) => updateStepAtIndex(index, patch)}
-                                            onRemove={() => removeStepAtIndex(index)}
-                                            stepTypeOptions={stepTypeOptions}
-                                          />
+                                      {stepItems.map((item, index) => {
+                                        const connectorKey = `between-${index}`
+                                        const isConditionNode = String(item?.step?.stepType || '').toLowerCase() === 'condition'
+                                        const prevStep = stepItems[index - 1]?.step || null
+                                        const prevIsCondition = String(prevStep?.stepType || '').toLowerCase() === 'condition'
+                                        const branchIntent = String(item?.step?.metadata?.branchIntent || '').toLowerCase()
+                                        const lane =
+                                          (branchIntent === 'yes' || branchIntent === 'no') && prevIsCondition
+                                            ? branchIntent
+                                            : 'main'
 
-                                          <div className="mt-2 mb-1 h-5 w-px bg-slate-300" />
+                                        const nodeWidthClass = isConditionNode ? 'max-w-[480px]' : 'max-w-[420px]'
 
-                                          <div
-                                            className={`mb-2 w-full transition-all ${
-                                              activeDragId ? 'opacity-70' : 'opacity-100'
-                                            }`}
-                                          >
-                                            <AddNodeMenu onAdd={(type) => insertStepAt(index + 1, type)} />
+                                        return (
+                                          <div key={item.dragId} className="flex w-full flex-col items-center">
+                                            {lane !== 'main' ? (
+                                              <div className="mt-1 mb-2 flex w-full items-center justify-center">
+                                                <div className="relative h-7 w-full max-w-5xl">
+                                                  <div className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-slate-300" />
+                                                  <div
+                                                    className={`absolute top-3 h-px ${
+                                                      lane === 'yes'
+                                                        ? 'left-[16.666%] right-1/2 bg-emerald-300'
+                                                        : 'left-1/2 right-[16.666%] bg-rose-300'
+                                                    }`}
+                                                  />
+                                                  <div
+                                                    className={`absolute top-3 h-4 w-px ${
+                                                      lane === 'yes' ? 'left-[16.666%] bg-emerald-300' : 'right-[16.666%] bg-rose-300'
+                                                    }`}
+                                                  />
+                                                </div>
+                                              </div>
+                                            ) : (
+                                              <div className="mt-2 h-4 w-px bg-slate-300" />
+                                            )}
+
+                                            <div className="grid w-full max-w-5xl grid-cols-1 gap-3 sm:grid-cols-3">
+                                              <div className="flex justify-center sm:justify-end">
+                                                {lane === 'yes' ? (
+                                                  <div className={`w-full ${nodeWidthClass}`}>
+                                                    <SortableWorkflowNode
+                                                      item={item}
+                                                      index={index}
+                                                      isExpanded={expandedStepKey === `step-${index}`}
+                                                      onToggle={() =>
+                                                        setExpandedStepKey((current) =>
+                                                          current === `step-${index}` ? 'none' : `step-${index}`
+                                                        )
+                                                      }
+                                                      onChange={(patch) => updateStepAtIndex(index, patch)}
+                                                      onRemove={() => removeStepAtIndex(index)}
+                                                      stepTypeOptions={stepTypeOptions}
+                                                      onOpenYesBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-yes-${index}` ? null : `condition-yes-${index}`
+                                                        )
+                                                      }
+                                                      onOpenNoBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-no-${index}` ? null : `condition-no-${index}`
+                                                        )
+                                                      }
+                                                    />
+                                                  </div>
+                                                ) : null}
+                                              </div>
+
+                                              <div className="flex justify-center">
+                                                {lane === 'main' ? (
+                                                  <div className={`w-full ${nodeWidthClass}`}>
+                                                    <SortableWorkflowNode
+                                                      item={item}
+                                                      index={index}
+                                                      isExpanded={expandedStepKey === `step-${index}`}
+                                                      onToggle={() =>
+                                                        setExpandedStepKey((current) =>
+                                                          current === `step-${index}` ? 'none' : `step-${index}`
+                                                        )
+                                                      }
+                                                      onChange={(patch) => updateStepAtIndex(index, patch)}
+                                                      onRemove={() => removeStepAtIndex(index)}
+                                                      stepTypeOptions={stepTypeOptions}
+                                                      onOpenYesBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-yes-${index}` ? null : `condition-yes-${index}`
+                                                        )
+                                                      }
+                                                      onOpenNoBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-no-${index}` ? null : `condition-no-${index}`
+                                                        )
+                                                      }
+                                                    />
+                                                  </div>
+                                                ) : null}
+                                              </div>
+
+                                              <div className="flex justify-center sm:justify-start">
+                                                {lane === 'no' ? (
+                                                  <div className={`w-full ${nodeWidthClass}`}>
+                                                    <SortableWorkflowNode
+                                                      item={item}
+                                                      index={index}
+                                                      isExpanded={expandedStepKey === `step-${index}`}
+                                                      onToggle={() =>
+                                                        setExpandedStepKey((current) =>
+                                                          current === `step-${index}` ? 'none' : `step-${index}`
+                                                        )
+                                                      }
+                                                      onChange={(patch) => updateStepAtIndex(index, patch)}
+                                                      onRemove={() => removeStepAtIndex(index)}
+                                                      stepTypeOptions={stepTypeOptions}
+                                                      onOpenYesBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-yes-${index}` ? null : `condition-yes-${index}`
+                                                        )
+                                                      }
+                                                      onOpenNoBranchMenu={() =>
+                                                        setOpenInsertMenuKey((current) =>
+                                                          current === `condition-no-${index}` ? null : `condition-no-${index}`
+                                                        )
+                                                      }
+                                                    />
+                                                  </div>
+                                                ) : null}
+                                              </div>
+                                            </div>
+
+                                            <div className="mt-3 h-4 w-px bg-slate-300" />
+
+                                            <ConnectorAddButton
+                                              menuOpen={openInsertMenuKey === connectorKey}
+                                              onToggle={() =>
+                                                setOpenInsertMenuKey((current) =>
+                                                  current === connectorKey ? null : connectorKey
+                                                )
+                                              }
+                                              onClose={() => setOpenInsertMenuKey(null)}
+                                              onAdd={(type) => insertStepAt(index + 1, type)}
+                                            />
+
+                                            {isConditionNode && (
+                                              <div className="mt-3 grid w-full max-w-5xl grid-cols-1 gap-3 sm:grid-cols-3">
+                                                <div className="flex flex-col items-center sm:items-end">
+                                                  <div className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                                                    <span>↙</span>
+                                                    <span>Yes</span>
+                                                  </div>
+                                                  <div className="mt-1 h-3 w-px bg-emerald-300" />
+                                                  <ConnectorAddButton
+                                                    menuOpen={openInsertMenuKey === `condition-yes-${index}`}
+                                                    onToggle={() =>
+                                                      setOpenInsertMenuKey((current) =>
+                                                        current === `condition-yes-${index}` ? null : `condition-yes-${index}`
+                                                      )
+                                                    }
+                                                    onClose={() => setOpenInsertMenuKey(null)}
+                                                    onAdd={(type) =>
+                                                      insertStepAt(index + 1, type, {
+                                                        metadata: {
+                                                          branchIntent: 'yes',
+                                                          branchFromStepId: item?.step?.id || null,
+                                                        },
+                                                      })
+                                                    }
+                                                    align="left"
+                                                  />
+                                                </div>
+                                                <div className="hidden sm:block" />
+                                                <div className="flex flex-col items-center sm:items-start">
+                                                  <div className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700">
+                                                    <span>No</span>
+                                                    <span>↘</span>
+                                                  </div>
+                                                  <div className="mt-1 h-3 w-px bg-rose-300" />
+                                                  <ConnectorAddButton
+                                                    menuOpen={openInsertMenuKey === `condition-no-${index}`}
+                                                    onToggle={() =>
+                                                      setOpenInsertMenuKey((current) =>
+                                                        current === `condition-no-${index}` ? null : `condition-no-${index}`
+                                                      )
+                                                    }
+                                                    onClose={() => setOpenInsertMenuKey(null)}
+                                                    onAdd={(type) =>
+                                                      insertStepAt(index + 1, type, {
+                                                        metadata: {
+                                                          branchIntent: 'no',
+                                                          branchFromStepId: item?.step?.id || null,
+                                                        },
+                                                      })
+                                                    }
+                                                    align="right"
+                                                  />
+                                                </div>
+                                              </div>
+                                            )}
+
+                                            <div className="mt-2 mb-2 h-3 w-px bg-slate-300" />
                                           </div>
-
-                                          <div className="mb-1 h-3 w-px bg-slate-300" />
-                                        </div>
-                                      ))}
+                                        )
+                                      })}
                                     </div>
                                   </SortableContext>
                                 </DndContext>
                               )}
+
+                              <div className="mx-auto mt-1 mb-2 h-4 w-px bg-slate-300" />
+
+                              <div className="mb-3 flex justify-center">
+                                <ConnectorAddButton
+                                  menuOpen={openInsertMenuKey === 'end'}
+                                  onToggle={() =>
+                                    setOpenInsertMenuKey((current) => (current === 'end' ? null : 'end'))
+                                  }
+                                  onClose={() => setOpenInsertMenuKey(null)}
+                                  onAdd={(type) => addStep(type)}
+                                />
+                              </div>
 
                               <div className="mx-auto mt-2 rounded-2xl border border-rose-200 bg-rose-50/80 px-3 py-2 text-center">
                                 <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Stop / End</p>

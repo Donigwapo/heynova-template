@@ -14,6 +14,7 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
       queuedCount: 0,
       requeuedCount: 0,
       skippedCount: 0,
+      skippedActiveRunCount: 0,
       error: new Error('Missing workflowId, userId, or campaignId'),
     }
   }
@@ -44,7 +45,7 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
       extra: { workflowId },
     })
 
-    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, error: stepError }
+    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, skippedActiveRunCount: 0, error: stepError }
   }
 
   if (!stepRow?.id) {
@@ -52,6 +53,7 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
       queuedCount: 0,
       requeuedCount: 0,
       skippedCount: 0,
+      skippedActiveRunCount: 0,
       error: new Error('No persisted email step found. Save workflow before activating.'),
     }
   }
@@ -73,13 +75,48 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
       extra: { campaignId, workflowId },
     })
 
-    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, error: leadsError }
+    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, skippedActiveRunCount: 0, error: leadsError }
   }
 
   const leads = Array.isArray(leadRows) ? leadRows : []
   if (leads.length === 0) {
-    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, error: null }
+    return { queuedCount: 0, requeuedCount: 0, skippedCount: 0, skippedActiveRunCount: 0, error: null }
   }
+
+  const leadIds = leads.map((lead) => lead.id).filter(Boolean)
+
+  // Fail-closed guard: if active-run lookup fails, do not enqueue to avoid duplicate-send risk.
+  const { data: activeRuns, error: activeRunsError } = await supabase
+    .from('workflow_runs')
+    .select('id,campaign_lead_id,status')
+    .eq('user_id', userId)
+    .eq('workflow_id', workflowId)
+    .in('campaign_lead_id', leadIds)
+    .in('status', ['pending', 'running', 'paused'])
+
+  if (activeRunsError) {
+    logSupabaseQueryError({
+      table: 'workflow_runs',
+      operation: 'select active runs by lead for enqueue guard',
+      userId,
+      error: activeRunsError,
+      extra: { workflowId, campaignId, leadIdsCount: leadIds.length },
+    })
+
+    return {
+      queuedCount: 0,
+      requeuedCount: 0,
+      skippedCount: 0,
+      skippedActiveRunCount: 0,
+      error: new Error('Unable to verify active execution eligibility for campaign leads.'),
+    }
+  }
+
+  const activeLeadIds = new Set(
+    (Array.isArray(activeRuns) ? activeRuns : [])
+      .map((row) => row?.campaign_lead_id)
+      .filter(Boolean)
+  )
 
   const keyed = []
   for (const lead of leads) {
@@ -122,8 +159,14 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
   const insertRows = []
   const failedRowIdsToRequeue = []
   let skippedCount = 0
+  let skippedActiveRunCount = 0
 
   for (const item of keyed) {
+    if (activeLeadIds.has(item.lead.id)) {
+      skippedActiveRunCount += 1
+      continue
+    }
+
     const existing = existingByKey.get(item.idempotencyKey)
 
     if (!existing) {
@@ -172,7 +215,7 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
         error: insertError,
         extra: { workflowId, campaignId, rows: insertRows.length },
       })
-      return { queuedCount: 0, requeuedCount: 0, skippedCount, error: insertError }
+      return { queuedCount: 0, requeuedCount: 0, skippedCount, skippedActiveRunCount, error: insertError }
     }
 
     queuedCount = insertRows.length
@@ -199,7 +242,7 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
         error: requeueError,
         extra: { workflowId, failedRows: failedRowIdsToRequeue.length },
       })
-      return { queuedCount, requeuedCount: 0, skippedCount, error: requeueError }
+      return { queuedCount, requeuedCount: 0, skippedCount, skippedActiveRunCount, error: requeueError }
     }
 
     requeuedCount = failedRowIdsToRequeue.length
@@ -210,10 +253,12 @@ export async function enqueueWorkflowEmailJobsOnActivate({ workflowId, userId, c
     campaignId,
     stepId: stepRow.id,
     eligibleLeads: leads.length,
+    activeRunBlockedLeads: activeLeadIds.size,
     queuedCount,
     requeuedCount,
     skippedCount,
+    skippedActiveRunCount,
   })
 
-  return { queuedCount, requeuedCount, skippedCount, error: null }
+  return { queuedCount, requeuedCount, skippedCount, skippedActiveRunCount, error: null }
 }

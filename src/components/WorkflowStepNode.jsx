@@ -59,6 +59,8 @@ function WorkflowStepNode({
   onRemove,
   stepTypeOptions,
   dragHandleProps,
+  onOpenYesBranchMenu,
+  onOpenNoBranchMenu,
 }) {
   const type = normalizeType(step?.stepType)
   const meta = NODE_META[type]
@@ -116,6 +118,31 @@ function WorkflowStepNode({
                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">{yesLabel}</span>
                   <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-700">{noLabel}</span>
                 </div>
+
+                {(onOpenYesBranchMenu || onOpenNoBranchMenu) && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenYesBranchMenu?.(event)
+                      }}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50"
+                    >
+                      + {yesLabel}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenNoBranchMenu?.(event)
+                      }}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50"
+                    >
+                      + {noLabel}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:worker": "node --test supabase/functions/workflow-email-native-worker/_internals.test.js",
+    "test:scheduler": "node --test scheduler/native-email-scheduler.test.js",
+    "test:c2": "node --test supabase/functions/workflow-shadow-activation-sync/_eligibility.test.js supabase/functions/workflow-outbox-execute-email/_guard.test.js",
+    "test:contracts": "node --test supabase/functions/workflow-contracts/native-legacy-contract.test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

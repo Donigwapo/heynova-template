@@ -1,6 +1,8 @@
 // Supabase Edge Function: workflow-outbox-execute-email
 // Executes one claimed outbox email row and finalizes status.
 
+import { classifyLegacyExecutionRisk } from './_guard.js'
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -449,6 +451,14 @@ Deno.serve(async (req) => {
       return errorResponse(409, 'invalid_status', 'Outbox row must be in in_progress status to execute.', {
         outboxId,
         status: outbox.status,
+      })
+    }
+
+    const executionRisk = classifyLegacyExecutionRisk(outbox)
+    if (executionRisk.block) {
+      await markOutboxSkipped(outbox.id, executionRisk.code || 'native_execution_required', executionRisk.reason)
+      return errorResponse(409, executionRisk.code || 'native_execution_required', executionRisk.reason, {
+        outboxId,
       })
     }
 

@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import TopHeader from '../components/TopHeader'
-import { fetchWorkflowListForUser } from '../lib/workflowsService'
+import AIModalShell from '../components/AIModalShell'
+import { fetchCampaignsByUserId } from '../lib/campaignsService'
+import { createWorkflowWithDefaultSteps, fetchWorkflowListForUser } from '../lib/workflowsService'
 
 function formatDate(value) {
   if (!value) return '—'
@@ -26,9 +28,22 @@ function statusBadgeClass(status) {
 
 function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [rows, setRows] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [createErrorMessage, setCreateErrorMessage] = useState('')
+  const [workflowNameInput, setWorkflowNameInput] = useState('')
+  const [campaignOptions, setCampaignOptions] = useState([])
+  const [selectedCampaignId, setSelectedCampaignId] = useState('')
+
+  const prefilledCampaignIdFromQuery = useMemo(() => {
+    const value = searchParams.get('campaignId')
+    return value || ''
+  }, [searchParams])
 
   useEffect(() => {
     let isMounted = true
@@ -37,7 +52,11 @@ function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
       setIsLoading(true)
       setErrorMessage('')
 
-      const { rows, error } = await fetchWorkflowListForUser(userProfile?.authUserId)
+      const [{ rows, error }, { campaigns, error: campaignsError }] = await Promise.all([
+        fetchWorkflowListForUser(userProfile?.authUserId),
+        fetchCampaignsByUserId(userProfile?.authUserId),
+      ])
+
       if (!isMounted) return
 
       if (error) {
@@ -53,6 +72,21 @@ function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
         return
       }
 
+      if (campaignsError) {
+        console.error('[CampaignWorkflowsPage] failed loading campaigns', {
+          table: 'campaigns',
+          user_id: userProfile?.authUserId || null,
+          pathname: window.location.pathname,
+          error: campaignsError,
+        })
+      }
+
+      const nextCampaignOptions = (campaigns || []).map((campaign) => ({
+        id: campaign.id,
+        name: campaign.name || 'Untitled Campaign',
+      }))
+
+      setCampaignOptions(nextCampaignOptions)
       setRows(rows || [])
       setIsLoading(false)
     }
@@ -62,7 +96,58 @@ function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
     return () => {
       isMounted = false
     }
-  }, [userProfile?.authUserId])
+  }, [userProfile?.authUserId, searchParams])
+
+  useEffect(() => {
+    if (!isCreateModalOpen) return
+
+    setCreateErrorMessage('')
+    setWorkflowNameInput('')
+
+    if (prefilledCampaignIdFromQuery) {
+      const exists = campaignOptions.some((campaign) => campaign.id === prefilledCampaignIdFromQuery)
+      setSelectedCampaignId(exists ? prefilledCampaignIdFromQuery : '')
+      return
+    }
+
+    setSelectedCampaignId('')
+  }, [isCreateModalOpen, prefilledCampaignIdFromQuery, campaignOptions])
+
+  async function handleCreateWorkflow(event) {
+    event?.preventDefault?.()
+    if (isCreating) return
+
+    const name = workflowNameInput.trim()
+    if (!name) {
+      setCreateErrorMessage('Workflow name is required.')
+      return
+    }
+
+    setIsCreating(true)
+    setCreateErrorMessage('')
+
+    const { workflow, error } = await createWorkflowWithDefaultSteps({
+      userId: userProfile?.authUserId,
+      campaignId: selectedCampaignId || null,
+      name,
+    })
+
+    if (error || !workflow?.id) {
+      console.error('[CampaignWorkflowsPage] failed creating workflow', {
+        table: 'workflows/workflow_steps',
+        user_id: userProfile?.authUserId || null,
+        campaign_id: selectedCampaignId || null,
+        error,
+      })
+      setCreateErrorMessage('Unable to create workflow right now. Please try again.')
+      setIsCreating(false)
+      return
+    }
+
+    setIsCreating(false)
+    setIsCreateModalOpen(false)
+    navigate(`/campaigns/workflows/${workflow.id}`)
+  }
 
   return (
     <div className="h-full bg-slate-50 text-slate-900">
@@ -88,7 +173,7 @@ function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
 
                 <button
                   type="button"
-                  onClick={() => navigate('/campaigns/workflows/new')}
+                  onClick={() => setIsCreateModalOpen(true)}
                   className="rounded-lg border border-indigo-200 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
                 >
                   New Workflow
@@ -152,6 +237,81 @@ function CampaignWorkflowsPage({ userProfile, onRunCommand = () => {} }) {
             </div>
           </main>
         </div>
+        <AIModalShell
+          isOpen={isCreateModalOpen}
+          onClose={() => {
+            if (isCreating) return
+            setIsCreateModalOpen(false)
+          }}
+          label="Workflow Setup"
+          title="Create Workflow"
+          description="Choose a workflow name and optionally link it to a campaign before creating a draft."
+          maxWidth="max-w-lg"
+          footer={(
+            <>
+              <button
+                type="button"
+                disabled={isCreating}
+                onClick={() => setIsCreateModalOpen(false)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="create-workflow-form"
+                disabled={isCreating}
+                className="rounded-lg border border-indigo-200 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isCreating ? 'Creating...' : 'Create Workflow'}
+              </button>
+            </>
+          )}
+        >
+          <form id="create-workflow-form" onSubmit={handleCreateWorkflow} className="space-y-4">
+            <div>
+              <label htmlFor="workflow-name" className="mb-1 block text-sm font-medium text-slate-700">
+                Workflow Name <span className="text-rose-600">*</span>
+              </label>
+              <input
+                id="workflow-name"
+                type="text"
+                value={workflowNameInput}
+                onChange={(event) => setWorkflowNameInput(event.target.value)}
+                placeholder="Enter workflow name"
+                autoFocus
+                disabled={isCreating}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="workflow-campaign" className="mb-1 block text-sm font-medium text-slate-700">
+                Associated Campaign
+              </label>
+              <select
+                id="workflow-campaign"
+                value={selectedCampaignId}
+                onChange={(event) => setSelectedCampaignId(event.target.value)}
+                disabled={isCreating}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">No Campaign (Standalone)</option>
+                {campaignOptions.map((campaign) => (
+                  <option key={campaign.id} value={campaign.id}>
+                    {campaign.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {createErrorMessage && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {createErrorMessage}
+              </div>
+            )}
+          </form>
+        </AIModalShell>
       </div>
     </div>
   )
