@@ -1,0 +1,21 @@
+services:
+  delay_workflow_scheduler:
+    image: node:20-alpine
+    container_name: heynova_delay_workflow_scheduler
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "scheduler/delay-workflow-scheduler.js"]
+    volumes:
+      - ./:/app:ro
+    environment:
+      NODE_ENV: production
+      DELAY_SCHEDULER_MODE: interval
+      DELAY_SCHEDULER_ENABLED: "false"
+      DELAY_SCHEDULER_EXECUTE: "false"
+      DELAY_SCHEDULER_INTERVAL_MS: "60000"
+      DELAY_SCHEDULER_TIMEOUT_MS: "45000"
+      DELAY_SCHEDULER_FUNCTION: workflow-shadow-scheduler-tick
+      DELAY_SCHEDULER_CANARY_USER_ID: 02979432-910d-4269-933d-d73949eb208a
+      DELAY_SCHEDULER_CANARY_WORKFLOW_ID: 215cb242-171f-40d1-b147-f41931565b58
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SCHEDULER_SERVICE_ROLE_TOKEN: ${SCHEDULER_SERVICE_ROLE_TOKEN:-}
