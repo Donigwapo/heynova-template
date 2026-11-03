@@ -11,7 +11,8 @@
     "test:worker": "node --test supabase/functions/workflow-email-native-worker/_internals.test.js",
     "test:scheduler": "node --test scheduler/native-email-scheduler.test.js",
     "test:c2": "node --test supabase/functions/workflow-shadow-activation-sync/_eligibility.test.js supabase/functions/workflow-outbox-execute-email/_guard.test.js",
-    "test:contracts": "node --test supabase/functions/workflow-contracts/native-legacy-contract.test.js"
+    "test:contracts": "node --test supabase/functions/workflow-contracts/native-legacy-contract.test.js",
+    "test:c7": "node --test supabase/functions/workflow-shadow-activation-sync/_native-run-metadata.test.js supabase/functions/workflow-shadow-activation-sync/_native-propagation-contract.test.js supabase/functions/workflow-shadow-activation-sync/_native-reused-run-gating.test.js supabase/functions/_shared/workflowShadowAdvancementEngine.test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

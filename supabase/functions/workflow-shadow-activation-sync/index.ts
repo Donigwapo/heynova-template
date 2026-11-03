@@ -5,6 +5,7 @@ import {
   isAllowlisted,
 } from './_eligibility.js'
 import { buildOutboxPayloadForNativeExecution } from './_outbox-native-marker.js'
+import { buildRunExecutionMetadata } from './_native-run-metadata.js'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -45,6 +46,7 @@ type RunRow = {
   campaign_id: string | null
   campaign_lead_id: string | null
   status: string
+  metadata?: JsonRecord | null
 }
 
 type RunStepRow = {
@@ -256,6 +258,27 @@ function buildShadowJobMetadata(outbox: OutboxRow): JsonRecord {
     outbox_status: outbox.status || null,
     do_not_execute: true,
   }
+}
+
+function isRunMetadataNativeConfirmed(run: RunRow | null | undefined) {
+  const metadata = asRecord(run?.metadata)
+  if (!metadata) return false
+
+  const executeNative = metadata.execute_native_email
+  const shadowMode = metadata.shadow_mode
+  const executionPath = String(metadata.execution_path || '').toLowerCase()
+
+  const executeNativeOk =
+    executeNative === true ||
+    String(executeNative || '').trim().toLowerCase() === 'true' ||
+    String(executeNative || '').trim() === '1'
+
+  const shadowModeOn =
+    shadowMode === true ||
+    String(shadowMode || '').trim().toLowerCase() === 'true' ||
+    String(shadowMode || '').trim() === '1'
+
+  return executeNativeOk && !shadowModeOn && executionPath === 'native'
 }
 
 function buildExecutionMetadata(nativeEligibility: { nativeEligible: boolean; reason: string }, outbox: OutboxRow) {
@@ -513,7 +536,7 @@ async function findActiveRunByLead(params: {
 
   const path = pathWithSelect(
     filter,
-    'id,user_id,workflow_id,workflow_version_id,campaign_id,campaign_lead_id,status'
+    'id,user_id,workflow_id,workflow_version_id,campaign_id,campaign_lead_id,status,metadata'
   )
 
   const result = await restGet(path)
@@ -531,6 +554,7 @@ async function createRun(params: {
   campaignId: string | null
   campaignLeadId: string
   outbox: OutboxRow
+  runMetadata: JsonRecord
 }) {
   const inserted = await restInsert(
     pathWithSelect(
@@ -549,7 +573,7 @@ async function createRun(params: {
         source: 'workflow_activation',
         mode: 'shadow',
       },
-      metadata: buildShadowRunMetadata(params.outbox),
+      metadata: params.runMetadata,
       started_at: nowIso(),
       updated_at: nowIso(),
     }
@@ -582,6 +606,7 @@ async function ensureRun(params: {
   campaignId: string | null
   campaignLeadId: string
   outbox: OutboxRow
+  runMetadata: JsonRecord
 }) {
   const activeResult = await findActiveRunByLead({
     userId: params.userId,
@@ -1120,6 +1145,7 @@ Deno.serve(async (req) => {
       campaignId,
       campaignLeadId,
       outbox,
+      runMetadata: buildShadowRunMetadata(outbox),
     })
 
     if (runResult.error || !runResult.row?.id) {
@@ -1220,13 +1246,52 @@ Deno.serve(async (req) => {
       claimedForNative: markedForNative,
     })
 
+    let effectiveNativeEligibility = nativeEligibility
+
+    if (runResult.action === 'reused' && nativeEligibility.nativeEligible) {
+      const runNativeConfirmed = isRunMetadataNativeConfirmed(run)
+      if (!runNativeConfirmed) {
+        effectiveNativeEligibility = {
+          nativeEligible: false,
+          reason: 'reused_run_not_native_confirmed',
+        }
+      }
+    }
+
+    if (runResult.action === 'created' && effectiveNativeEligibility.nativeEligible) {
+      const runMetadata = buildRunExecutionMetadata(effectiveNativeEligibility, outboxForJob)
+      const runPatch = await restPatch(
+        `workflow_runs?id=eq.${encodeURIComponent(run.id)}`,
+        {
+          metadata: runMetadata,
+          updated_at: nowIso(),
+        },
+        'return=minimal'
+      )
+
+      if (!runPatch.ok) {
+        const rec = asRecord(runPatch.data)
+        const message = String(rec?.message || rec?.error || 'Unable to persist native run metadata patch.')
+
+        failures.push({
+          outboxId: outbox.id,
+          campaignLeadId,
+          runId: run.id,
+          runStepId: runStep.id,
+          stage: 'run_metadata_native_patch',
+          message,
+        })
+        continue
+      }
+    }
+
     const jobResult = await ensureJob({
       run,
       runStep,
       outbox: outboxForJob,
       workflowVersionId,
       workflowVersionStepId,
-      nativeEligibility,
+      nativeEligibility: effectiveNativeEligibility,
     })
 
     if (jobResult.error || !jobResult.row?.id) {
@@ -1256,7 +1321,7 @@ Deno.serve(async (req) => {
 
     const job = jobResult.row
 
-    if (nativeEligibility.nativeEligible) {
+    if (effectiveNativeEligibility.nativeEligible) {
       nativeEligibleJobs += 1
     } else {
       legacyShadowJobs += 1
@@ -1274,7 +1339,7 @@ Deno.serve(async (req) => {
       jobId: null,
       eventType: 'run_created',
       payload: {
-        shadow_mode: !nativeEligibility.nativeEligible,
+        shadow_mode: !effectiveNativeEligibility.nativeEligible,
         action: runResult.action,
         outbox_id: outbox.id,
       },
@@ -1293,7 +1358,7 @@ Deno.serve(async (req) => {
       jobId: null,
       eventType: 'step_created',
       payload: {
-        shadow_mode: !nativeEligibility.nativeEligible,
+        shadow_mode: !effectiveNativeEligibility.nativeEligible,
         action: runStepResult.action,
         outbox_id: outbox.id,
       },
@@ -1312,9 +1377,9 @@ Deno.serve(async (req) => {
       jobId: job.id,
       eventType: 'job_created',
       payload: {
-        shadow_mode: !nativeEligibility.nativeEligible,
-        execute_native_email: nativeEligibility.nativeEligible,
-        native_eligibility_reason: nativeEligibility.reason,
+        shadow_mode: !effectiveNativeEligibility.nativeEligible,
+        execute_native_email: effectiveNativeEligibility.nativeEligible,
+        native_eligibility_reason: effectiveNativeEligibility.reason,
         action: jobResult.action,
         outbox_id: outbox.id,
         external_ref_type: 'workflow_delivery_outbox',

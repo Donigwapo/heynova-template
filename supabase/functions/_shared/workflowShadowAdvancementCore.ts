@@ -22,6 +22,7 @@ export type RunRow = {
   campaign_id: string | null
   campaign_lead_id: string | null
   status: string
+  metadata?: JsonRecord | null
 }
 
 export type RunStepRow = {

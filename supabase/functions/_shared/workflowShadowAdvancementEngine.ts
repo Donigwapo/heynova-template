@@ -43,13 +43,30 @@ type JobRow = {
   idempotency_key: string | null
 }
 
+function asBool(value: unknown) {
+  if (value === true) return true
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
+function isRunNativeEligible(run: RunRow) {
+  const metadata = asRecord(run.metadata)
+  if (!metadata) return false
+
+  if (!asBool(metadata.execute_native_email)) return false
+  if (String(metadata.execution_path || '').toLowerCase() !== 'native') return false
+  if (asBool(metadata.shadow_mode)) return false
+
+  return true
+}
+
 async function fetchRun(supabaseUrl: string, serviceRoleKey: string, runId: string) {
   const result = await restGet(
     supabaseUrl,
     serviceRoleKey,
     pathWithSelect(
       `workflow_runs?id=eq.${encodeURIComponent(runId)}&limit=1`,
-      'id,user_id,workflow_id,workflow_version_id,campaign_id,campaign_lead_id,status,started_at,completed_at,updated_at'
+      'id,user_id,workflow_id,workflow_version_id,campaign_id,campaign_lead_id,status,metadata,started_at,completed_at,updated_at'
     )
   )
   if (!result.ok) return { row: null as RunRow | null, error: new Error('Unable to load workflow_run') }
@@ -481,6 +498,31 @@ async function ensureShadowJobForRunStep(params: {
     return { row: existingRow, created: false, error: null }
   }
 
+  const nativeEligibleRun = stepType === 'email' && isRunNativeEligible(params.run)
+
+  const basePayload: JsonRecord = {
+    workflow_version_id: params.stepDef.workflow_version_id || params.run.workflow_version_id || null,
+    workflow_version_step_id: params.stepDef.workflow_version_id ? params.stepDef.id : null,
+    step_snapshot: createStepSnapshot(params.stepDef),
+  }
+
+  const jobPayload: JsonRecord = nativeEligibleRun
+    ? {
+        ...basePayload,
+        shadow_mode: false,
+        execute_native_email: true,
+        execution_path: 'native',
+        source: 'native_run_advancement',
+      }
+    : {
+        ...basePayload,
+        shadow_mode: true,
+        shadow_source: 'workflow_shadow_advancement_engine',
+        execute_disabled: true,
+        execution_path: 'shadow',
+        source: 'legacy_shadow_advancement',
+      }
+
   const inserted = await restInsert(
     params.supabaseUrl,
     params.serviceRoleKey,
@@ -503,14 +545,7 @@ async function ensureShadowJobForRunStep(params: {
       attempt_count: 0,
       max_attempts: 5,
       idempotency_key: idempotencyKey,
-      payload: {
-        shadow_mode: true,
-        shadow_source: 'workflow_shadow_advancement_engine',
-        execute_disabled: true,
-        workflow_version_id: params.stepDef.workflow_version_id || params.run.workflow_version_id || null,
-        workflow_version_step_id: params.stepDef.workflow_version_id ? params.stepDef.id : null,
-        step_snapshot: createStepSnapshot(params.stepDef),
-      },
+      payload: jobPayload,
       result: null,
       updated_at: nowIso(),
     }
